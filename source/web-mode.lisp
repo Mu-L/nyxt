@@ -584,4 +584,6 @@ Otherwise go forward to the only child."
                            :buffer (buffer mode)))
   (reset-page-zoom :buffer (buffer mode)
                :ratio (current-zoom-ratio (buffer mode)))
+  ;; Need to force document-model re-parsing.
+  (setf (document-model mode) nil)
   url)
