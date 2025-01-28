@@ -21,20 +21,12 @@ packages.
 - `:mode' lists it when the corresponding mode is active.
 
 - `:anonymous' never lists it.")
-   (deprecated-p
-    nil
-    :type boolean
-    :reader t
-    :writer nil
-    :documentation "Whether a warning before executing a deprecated command is
-signaled.")
    (last-access
     (time:now)
     :type time:timestamp
     :documentation "Last time this command was called from prompt buffer.
 Useful to sort the commands by most recent use."))
   (:metaclass closer-mop:funcallable-standard-class)
-  (:accessor-name-transformer (class*:make-name-transformer name))
   (:export-class-name-p t)
   (:export-accessor-names-p t)
   (:export-predicate-name-p t)
@@ -59,14 +51,6 @@ These specializations are reserved to the user."))
   "A useful shortcut."
   (closer-mop:generic-function-name command))
 
-(defmethod closer-mop:compute-effective-method :around ((command command) combin applicable)
-  (declare (ignorable applicable combin))
-  ;; TODO: Should `define-deprecated-command' report the version
-  ;; number of deprecation?  Maybe OK to just remove all deprecated
-  ;; commands on major releases.
-  `(echo-warning "~a is deprecated." ,(name command))
-  (call-next-method))
-
 (defun initialize-command (command lambda-expression)
   (when (uiop:emptyp (closer-mop:generic-function-name command))
     (alex:required-argument 'name))
@@ -81,8 +65,7 @@ These specializations are reserved to the user."))
                  (not (eq :anonymous (visibility command))))
             (error "Command ~a requires documentation." (name command))
             (setf (documentation command 'function) doc)))))
-  (unless (or (eq :anonymous (visibility command))
-              (deprecated-p command))
+  (unless (eq :anonymous (visibility command))
     ;; Overwrite previous command:
     (setf *command-list* (delete (closer-mop:generic-function-name command) *command-list*
                                  :key #'closer-mop:generic-function-name))
@@ -116,7 +99,7 @@ Example:
     \"Open files in some way.\"
     ;; Note that `source' is captured in the closure.
     (mapc (opener source) files)))"
-  (let ((doc (nth-value 2 (alex:parse-body body :documentation t))) )
+  (let ((doc (nth-value 2 (alex:parse-body body :documentation t))))
     (alex:with-gensyms (closed-over-body)
       ;; Warning: `make-command' takes a lambda-expression as an unevaluated list,
       ;; thus the BODY environment is not that of the lexical environment
@@ -196,52 +179,52 @@ regardless of whether NAME is defined as a command."
   (setf *command-list* (delete name *command-list* :key #'name))
   (fmakunbound name))
 
-(defmacro define-deprecated-command (name (&rest arglist) &body body) ; TODO: Do we even need this?
-  "Define NAME, a deprecated command.
-This is just like a command.  It's recommended to explain why the function is
-deprecated and by what in the docstring."
-  `(prog1 (define-command ,name (,@arglist) ,@body)
-     (setf (slot-value #',name 'visibility) :mode
-           (slot-value #'name 'deprecated-p) t)))
+(-> list-all-maybe-subpackages () (list-of types:package-designator))
+(defun list-all-maybe-subpackages ()
+  (remove-if-not (lambda (pkg) (find #\/ (package-name pkg)))
+                 (list-all-packages)))
+
+(export-always 'subpackage-p)
+(-> subpackage-p (types:package-designator types:package-designator) (values boolean &optional))
+(defun subpackage-p (subpackage package)
+  "Return non-nil if SUBPACKAGE is a subpackage of PACKAGE or is PACKAGE itself.
+A subpackage has a name that starts with that of PACKAGE followed by a '/' separator."
+  (or (eq (find-package subpackage) (find-package package))
+      (uiop:string-prefix-p (uiop:strcat (package-name package) "/")
+                            (package-name subpackage))))
+
+(export-always 'subpackages)
+(-> subpackages (types:package-designator) (list-of types:package-designator))
+(defun subpackages (package)
+  "Return all subpackages of PACKAGE, including itself."
+  (append (list package)
+          (remove-if-not (lambda (p) (subpackage-p p package))
+                         (list-all-maybe-subpackages))))
 
 (-> nyxt-subpackage-p (types:package-designator) boolean)
 (defun nyxt-subpackage-p (package)
   "Return non-nil if PACKAGE is a sub-package of `nyxt'."
-  (sym:subpackage-p package :nyxt))
+  (subpackage-p package :nyxt))
 
 (-> nyxt-user-subpackage-p (types:package-designator) boolean)
 (defun nyxt-user-subpackage-p (package)
   "Return non-nil if PACKAGE is a sub-package of `nyxt' or `nyxt-user'."
-  (sym:subpackage-p package :nyxt-user))
-
-(defvar *nyxt-extra-packages* (mapcar #'find-package
-                                      '(analysis
-                                        class-star
-                                        download-manager
-                                        history-tree
-                                        password
-                                        prompter
-                                        text-buffer
-                                        theme
-                                        user-interface))
-  "Packages to append to the result of `nyxt-packages'.")
+  (subpackage-p package :nyxt-user))
 
 (defun nyxt-packages ()
-  "Return the Nyxt package, all its subpackages plus what's in `*nyxt-extra-packages*'.
-See also `nyxt-user-packages'."
-  (cons
-   (find-package :nyxt)
-   (sera:filter #'nyxt-subpackage-p
-                (list-all-packages))))
+  "Return all Nyxt packages.
+See also `nyxt-user-packages', `nyxt-extension-packages' and `non-nyxt-packages'."
+  (sera:filter #'nyxt-subpackage-p (list-all-packages)))
 
 (defun nyxt-user-packages ()
-  "Return the Nyxt package, the `:nyxt-user', all their subpackages plus what's
-in `*nyxt-extra-packages*'.
-See also `nyxt-packages'."
-  (cons
-   (find-package :nyxt-user)
-   (sera:filter #'nyxt-user-subpackage-p
-                (list-all-packages))))
+  "Return all Nyxt user packages."
+  (sera:filter #'nyxt-user-subpackage-p (list-all-packages)))
+
+(defun nyxt-extension-packages ()
+  "Return all the Nyxt extension packages.
+A package is considered an extension one if its name is \"nx-\"-prefixed."
+  (remove-if-not (curry #'str:starts-with-p "NX-") (list-all-packages)
+                 :key #'package-name))
 
 (defun non-nyxt-packages ()
   "Return the packages that are not related to Nyxt.
@@ -253,8 +236,7 @@ It's the complement of `nyxt-packages' and `nyxt-user-packages'."
   ((name nil
          :type (or symbol null))
    (class-sym nil
-              :type (or symbol null)))
-  (:accessor-name-transformer (class*:make-name-transformer name)))
+              :type (or symbol null))))
 
 (defun class-slots (class-sym &key (visibility :any))
   "Return the list of slots with VISIBILITY."
@@ -275,9 +257,6 @@ See `sym:package-symbols'."
                      (class-slots class-sym :visibility visibility)))
            (sym:package-classes packages)))
 
-;; FIXME: Set elsewhere?
-(setf sym:*default-packages* (list :nyxt :nyxt-user))
-
 (sym:define-symbol-type command (function)
   (command-p (ignore-errors (symbol-function sym:%symbol%))))
 
@@ -285,8 +264,8 @@ See `sym:package-symbols'."
   "List commands.
 Commands are instances of the `command' class.
 When MODE-SYMBOLS are provided, list only the commands that belong to the
-corresponding mode packages or of a parent mode packages.
-Otherwise list all commands.
+corresponding mode packages or of a parent mode packages.  Otherwise list all
+commands. Additionally, list all commands within the Nyxt package.
 With MODE-SYMBOLS and GLOBAL-P, include global commands."
   ;; TODO: Make sure we list commands of inherited modes.
   (if mode-symbols
@@ -308,17 +287,26 @@ With MODE-SYMBOLS and GLOBAL-P, include global commands."
        *command-list*)
       *command-list*))
 
+(defun list-mode-commands (mode-symbol)
+  "List commands.
+Commands are instances of the `command' class.  Only commands defined within the
+context of a mode are listed."
+  (remove-if-not
+   (lambda (command)
+     (eq (symbol-package (name command))
+         (symbol-package mode-symbol)))
+   *command-list*))
+
 (defun run-command (command &optional args)
   ;; Bind current buffer for the duration of the command.  This
   ;; way, if the user switches buffer after running a command
   ;; but before command termination, `current-buffer' will
   ;; return the buffer from which the command was invoked.
   (with-current-buffer (current-buffer)
-    (let ((*interactive-p* t))
-      (handler-case (apply #'funcall command args)
-        (prompt-buffer-canceled ()
-          (log:debug "Prompt buffer interrupted")
-          nil)))))
+    (handler-case (apply #'funcall command args)
+      (prompt-buffer-canceled ()
+        (log:debug "Prompt buffer interrupted")
+        nil))))
 
 (defun run (command &optional args)
   "Run COMMAND over ARGS and return its result.
@@ -342,12 +330,6 @@ See `run' for a way to run commands in a synchronous fashion and return the
 result."
   (run-thread "run-async command"
     (run-command command args)))
-
-(define-command forward-to-renderer (&key (window (current-window))
-                                     (buffer (current-buffer)))
-  "A command that forwards the last key press to the renderer.
-This is useful to override bindings to be forwarded to the renderer."
-  (ffi-generate-input-event window (last-event buffer)))
 
 (define-command nothing ()                 ; TODO: Replace with ESCAPE special command that allows dispatched to cancel current key stack.
   "A command that does nothing.

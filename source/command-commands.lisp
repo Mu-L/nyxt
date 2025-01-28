@@ -4,40 +4,50 @@
 (in-package :nyxt)
 
 (define-class hook-description ()
-  ((name ""
-         :documentation "The hook name.")
-   (value nil
-          :type t
-          :documentation "The hook value."))
-  (:accessor-name-transformer (class*:make-name-transformer name)))
+  ((name
+    ""
+    :documentation "The hook name.")
+   (value
+    nil
+    :documentation "The hook value.")))
 
 (defun command-attributes (command &optional (buffer (active-buffer (current-window :no-rescan))))
-  (let* ((bindings (keymaps:binding-keys
-                    (name command)
-                    (current-keymaps buffer))))
-    `(("Name" ,(string-downcase (closer-mop:generic-function-name command)))
-      ("Bindings" ,(format nil "~{~a~^, ~}" bindings))
-      ("Docstring" ,(or (first (sera::lines (documentation command 'function)))
-                        ""))
-      ("Mode" ,(let ((package-name (str:downcase (uiop:symbol-package-name (closer-mop:generic-function-name command)))))
-                 (if (sera:in package-name "nyxt" "nyxt-user")
-                     ""
-                     (str:replace-first "nyxt/" "" package-name)))))))
+  (let ((command-name (name command)))
+    `(("Name" ,(string-downcase command-name) (:width 1))
+      ("Bindings" ,(format nil "~{~a~^, ~}"
+                              (keymaps:pretty-binding-keys
+                               command-name
+                               (current-keymaps buffer)
+                               :print-style (keymaps:name (keyscheme buffer))))
+                     (:width 1))
+      ("Docstring" ,(documentation-line command 'function "") (:width 4))
+      ("Mode" ,(let ((package-name (uiop:symbol-package-name command-name)))
+                 (if (str:starts-with-p "NYXT/MODE/" package-name)
+                     (string-downcase (str:replace-first "NYXT/MODE/" "" package-name))
+                     ""))
+              (:width 1)))))
 
 (define-class command-source (prompter:source)
   ((prompter:name "Commands")
-   (global-p t
-             :type boolean
-             :documentation "Whether global commands are included in the suggestions.")
-   (buffer (current-buffer)
-           :type buffer)
-   (prompter:constructor (lambda (source)
-                           (sort-by-time
-                            (list-commands
-                             :global-p (global-p source)
-                             :mode-symbols (mapcar #'sera:class-name-of (sera:filter #'enabled-p (modes (buffer source)))))))))
+   (global-p
+    t
+    :type boolean
+    :documentation "Whether global commands are included in the suggestions.")
+   (buffer
+    (current-buffer)
+    :type buffer)
+   (prompter:constructor
+    (lambda (source)
+      (sort-by-time
+       (list-commands :global-p (global-p source)
+                      :mode-symbols (mapcar #'sera:class-name-of
+                                            (sera:filter #'enabled-p
+                                                         (modes (buffer source))))))))
+   (prompter:active-attributes-keys
+    '("Name" "Bindings" "Docstring")
+    :accessor nil)
+   (prompter:filter-preprocessor #'prompter:filter-exact-matches))
   (:export-class-name-p t)
-  (:accessor-name-transformer (class*:make-name-transformer name))
   (:documentation "Prompter source to execute commands.
 Global commands are listed if `global-p' is non-nil.
 Mode commands of enabled modes are also listed.
@@ -46,8 +56,8 @@ from a key binding.")
   (:metaclass user-class))
 
 (defmethod predict-next-command ((browser browser))
-  (alex:when-let ((prediction (analysis:predict (command-model browser)
-                                                (list (last-command browser)))))
+  (when-let ((prediction (analysis:predict (command-model browser)
+                                           (list (last-command browser)))))
     (analysis:element prediction)))
 
 (define-class predicted-command-source (prompter:source)
@@ -55,9 +65,9 @@ from a key binding.")
    (prompter:constructor
     (lambda (source)
       (declare (ignore source))
-      (list (predict-next-command *browser*)))))
+      (list (predict-next-command *browser*))))
+   (prompter:filter-preprocessor #'prompter:filter-exact-matches))
   (:export-class-name-p t)
-  (:accessor-name-transformer (class*:make-name-transformer name))
   (:documentation "Prompter source to predict commands.")
   (:metaclass user-class))
 
@@ -68,66 +78,6 @@ from a key binding.")
 (defmethod prompter:object-attributes ((command command) (source prompter:source))
   (declare (ignore source))
   (command-attributes command))
-
-(define-class extended-command-source (prompter:source)
-  ((prompter:name "Lisp expression")
-   (prompter:filter-preprocessor
-    (lambda (suggestions source input)
-      (unless (uiop:emptyp input)
-        (or
-         (ignore-errors
-          (let* ((proper-input (if (and (str:starts-with-p "(" input)
-                                        (str:ends-with-p ")" input))
-                                   input
-                                   (str:concat "(" input ")")))
-                 (expression (uiop:safe-read-from-string proper-input))
-                 (symbol (symbol-name (first expression)))
-                 (function (or (sera:and-let* ((suggestions suggestions)
-                                               (prev (prompter:value (first suggestions)))
-                                               (prev-symbol (first prev))
-                                               (_ (equalp symbol (symbol-name prev-symbol))))
-                                 prev-symbol)
-                               (sym:resolve-symbol symbol :command (list-all-packages))
-                               (sym:resolve-symbol symbol :function (list-all-packages)))))
-            (when (fboundp function)
-              (list (funcall (prompter:suggestion-maker source)
-                             (cons function (rest expression))
-                             source input)))))
-         (ignore-errors
-          (mapcar (lambda (s)
-                    (funcall (prompter:suggestion-maker source) s source input))
-                  (remove-if-not (alex:disjoin #'fboundp #'boundp)
-                                 (mapcar (alex:rcurry #'uiop:safe-read-from-string
-                                                      :package (find-package :nyxt))
-                                         (first (swank:simple-completions input *package*))))))))))
-   (buffer (current-buffer)
-           :type buffer))
-  (:export-class-name-p t)
-  (:accessor-name-transformer (class*:make-name-transformer name))
-  (:documentation "Prompter source to execute commands with arguments.
-Includes all commands and modes, and adds arbitrary Lisp functions on top of that.")
-  (:metaclass user-class))
-
-(defmethod prompter:object-attributes ((extended-command list) (source extended-command-source))
-  (declare (ignore source))
-  (let ((function (symbol-function (first extended-command)))
-        (*print-case* :downcase))
-    `(("Expression" ,(format nil "~s" extended-command))
-      ("Arguments" ,(remove #\newline (format nil "~{~a~^ ~}" (arglist function))))
-      ("Documentation" ,(or (first (sera::lines (documentation function 'function)))
-                            "")))))
-
-(defmethod prompter:object-attributes ((extended-command symbol) (source extended-command-source))
-  (declare (ignore source))
-  (let ((*print-case* :downcase))
-    (if (fboundp extended-command)
-        (let ((function (symbol-function extended-command)))
-          `(("Expression" ,(format nil "~s" extended-command))
-            ("Arguments" ,(remove #\newline (format nil "~{~a~^ ~}" (arglist function))))
-            ("Documentation" ,(or (first (sera::lines (documentation function 'function))) ""))))
-        `(("Expression" ,(prini-to-string extended-command))
-          ("Arguments" "")
-          ("Documentation" ,(or (documentation extended-command 'variable) ""))))))
 
 (define-command execute-command ()
   "Execute a command by name.
@@ -140,7 +90,7 @@ together with the arglists and documentations of the functions typed in."
      :prompt "Execute command"
      :sources (list (make-instance
                      'command-source
-                     :return-actions
+                     :actions-on-return
                      (list (lambda-command run-command* (commands)
                              "Run the chosen command."
                              (let ((command (first commands)))
@@ -150,109 +100,14 @@ together with the arglists and documentations of the functions typed in."
                              "Show the documentation and other properties of this command."
                              (describe-command :command (name (first commands))))))
                     (make-instance
-                     'extended-command-source
-                     :return-actions
-                     (lambda-command evaluate-lisp-expression* (exprs)
-                       "Evaluate the inputted Lisp expression."
-                       (run-thread "evaluator"
-                         (let ((*interactive-p* t))
-                           (echo "~s" (eval (first exprs)))))))
-                    (make-instance
                      'predicted-command-source
-                     :return-actions
+                     :actions-on-return
                      (lambda-command run-command* (commands)
                        "Run the chosen command."
-                       (alex:when-let ((command (first commands)))
+                       (when-let ((command (first commands)))
                          (setf (last-access command) (time:now))
                          (run-async command)))))
      :hide-suggestion-count-p t)))
-
-(defun parse-function-lambda-list-types (fn)
-  #-sbcl
-  (declare (ignore fn))
-  #-sbcl
-  (warn "Function type parsing is not supported on this Lisp implementation.")
-  #+sbcl
-  (let* ((types (second (sb-introspect:function-type fn)))
-         (keywords '())
-         (type-batches (sera:split-sequence-if (lambda (type)
-                                                 (when (find type lambda-list-keywords)
-                                                   (push type keywords)))
-                                               types))
-         (keyword-type-pairs (pairlis keywords (rest type-batches))))
-    (alex:nreversef keywords)
-    (values (first type-batches)
-            (alex:assoc-value keyword-type-pairs '&optional)
-            (alex:assoc-value keyword-type-pairs '&rest)
-            (alex:assoc-value keyword-type-pairs '&key))))
-
-(defun prompt-argument (prompt &optional type input)
-  (let ((value
-          (first
-           (evaluate
-            (prompt1
-             :prompt (if type
-                         (format nil "~a (~a)" prompt type)
-                         prompt)
-             :input (write-to-string input)
-             :sources (make-instance 'prompter:raw-source
-                                     :name "Evaluated input"))))))
-    (if (or (not type)
-            (typep value type))
-        value
-        (progn
-          (echo "~s has type ~s, expected ~s."
-                value (type-of value) type)
-          (prompt-argument prompt type input)))))
-
-(defun arglist (fn)
-  "Like `swank-backend:arglist' but normalized the result for `alex:parse-ordinary-lambda-list'."
-  #-ccl
-  (swank-backend:arglist fn)
-  #+ccl
-  (let ((package (alex:if-let ((name (swank-backend:function-name fn)))
-                   (symbol-package (if (listp name)
-                                       ;; Closures are named '(:internal NAME)
-                                       (second name)
-                                       name))
-                   *package*)))
-    (delete 'ccl::&lexpr
-            (mapcar (lambda (s)
-                      (if (keywordp s) (intern (string s) package) s))
-                    (swank-backend:arglist fn)))))
-
-(define-command execute-extended-command (&optional command)
-  "Prompt for arguments to pass to a given COMMAND.
-User input is evaluated Lisp."
-  ;; TODO: Add support for &rest arguments.
-  (let* ((command (or command
-                      (prompt1
-                       :prompt "Execute extended command"
-                       :sources 'command-source
-                       :hide-suggestion-count-p t)))
-         (lambda-list (arglist (slot-value command 'fn))))
-    (multiple-value-match (alex:parse-ordinary-lambda-list lambda-list)
-      ((required-arguments optional-arguments _ keyword-arguments)
-       (multiple-value-match (parse-function-lambda-list-types (slot-value command 'fn))
-         ((required-types optional-types _ keyword-types)
-          (flet ((parse-args (params)
-                   (mappend
-                    (lambda-match
-                      ((cons (and param (type symbol)) type)
-                       (list (prompt-argument param type)))
-                      ((cons (list (list keyword name) default _) type)
-                       (list keyword
-                             (prompt-argument name type default)))
-                      ((cons (list name default _) type)
-                       (list (prompt-argument name type default))))
-                    params)))
-            (setf (last-access command) (time:now))
-            (run-async
-             command
-             (mappend #'parse-args
-                      (list (pairlis required-arguments required-types)
-                            (pairlis optional-arguments optional-types)
-                            (pairlis keyword-arguments (mapcar #'second keyword-types))))))))))))
 
 (defun get-hooks ()
   (flet ((list-hooks (object)
@@ -275,47 +130,44 @@ User input is evaluated Lisp."
 
 (define-class hook-source (prompter:source)
   ((prompter:name "Hooks")
-   (prompter:constructor (get-hooks))))
+   (prompter:constructor (get-hooks))
+   (prompter:actions-on-return (lambda-mapped-command value))))
 
 (defmethod prompter:object-attributes ((hook-description hook-description) (source hook-source))
   (declare (ignore source))
-  `(("Name" ,(name hook-description))
-    ("Value" ,(value hook-description))))
+  `(("Name" ,(name hook-description))))
 
 (define-class handler-source (prompter:source)
   ((prompter:name "Handlers")
-   (hook :accessor hook
-         :initarg :hook
-         :documentation "The hook for which to retrieve handlers for.")
-   (prompter:constructor (lambda (source)
-                           (hooks:handlers (hook source))))))
+   (hook
+    nil
+    :documentation "The hook for which to retrieve handlers for.")
+   (prompter:constructor (lambda (source) (hooks:handlers (hook source))))))
 
-(defmethod prompter:object-attributes ((handler hooks:handler) (source handler-source))
+(defmethod prompter:object-attributes ((handler symbol) (source handler-source))
   (declare (ignore source))
   `(("Name" ,(str:downcase (hooks:name handler)))))
 
 (define-class disabled-handler-source (handler-source)
-  ((prompter:constructor (lambda (source)
-                           (hooks:disabled-handlers (hook source))))))
+  ((prompter:constructor (lambda (source) (hooks:disabled-handlers (hook source))))))
+
+(defun manage-hook-handler (action)
+  (let ((hook (prompt1 :prompt "Hook"
+                       :sources 'hook-source)))
+    (funcall (case action
+               (:enable #'hooks:enable-hook)
+               (:disable #'hooks:disable-hook))
+             hook
+             (prompt1 :prompt "Handler"
+                      :sources (make-instance (case action
+                                                (:enable 'disabled-handler-source)
+                                                (:disable 'handler-source))
+                                              :hook hook)))))
 
 (define-command-global disable-hook-handler ()
-  "Remove handler(s) from a hook."
-  (let* ((hook-desc (prompt1
-                     :prompt "Hook where to disable handler"
-                     :sources 'hook-source))
-         (handler (prompt1
-                   :prompt (format nil "Disable handler from ~a" (name hook-desc))
-                   :sources (make-instance 'handler-source
-                                           :hook (value hook-desc)))))
-    (hooks:disable-hook (value hook-desc) handler)))
+  "Remove handler of a hook."
+  (manage-hook-handler :disable))
 
 (define-command-global enable-hook-handler ()
-  "Enable handler(s) from a hook."
-  (let* ((hook-desc (prompt1
-                     :prompt "Hook where to enable handler"
-                     :sources 'hook-source))
-         (handler (prompt1
-                   :prompt (format nil "Enable handler from ~a" (name hook-desc))
-                   :sources (make-instance 'disabled-handler-source
-                                           :hook (value hook-desc)))))
-    (hooks:enable-hook (value hook-desc) handler)))
+  "Add handler of a hook."
+  (manage-hook-handler :enable))

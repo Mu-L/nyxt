@@ -17,8 +17,8 @@
            (:h1 title)
            (:h2 "Condition")
            (:pre condition-string)
-           (alex:when-let ((suggestions (alex:mappend #'nyxt/migration:find-suggestions
-                                                      (sera:tokens condition-string))))
+           (when-let ((suggestions (alex:mappend #'nyxt/migration:find-suggestions
+                                                 (sera:tokens condition-string))))
              (:h2 "Suggestions")
              (:ul (dolist (suggestion suggestions)
                     (:li (:raw (nyxt/migration:tip suggestion))))))
@@ -26,7 +26,7 @@
            (:pre backtrace)))
         "text/html;charset=utf8")
        error-buffer))
-    (window-set-buffer window error-buffer)))
+    (ffi-window-set-buffer window error-buffer)))
 
 (-> load-lisp
     ((or null types:pathname-designator) &key (:package (or null package)))
@@ -72,16 +72,17 @@ On error, return the condition as a first value and the backtrace as second valu
                     (if (uiop:file-exists-p config-path)
                         (uiop:pathname-directory-pathname config-path)
                         (uiop:getcwd))))
-          :extra-modes 'nyxt/file-manager-mode:file-manager-mode
+          :extra-modes 'nyxt/mode/file-manager:file-manager-mode
           :sources
-          (make-instance 'nyxt/file-manager-mode:file-source
+          (make-instance 'nyxt/mode/file-manager:file-source
                          :extensions '("lisp")
-                         :return-actions (lambda-command load-file* (files)
-                                           (dolist (file files)
-                                             (load-lisp file))))))
+                         :actions-on-return (lambda-command load-file* (files)
+                                              (dolist (file files)
+                                                (load-lisp file))))))
 
-(define-command clean-configuration ()
-  "Clean all the user configuration created with `define-configuration' or `customize-instance'."
+(export-always 'clean-configuration)
+(defun clean-configuration ()
+  "Undo user configuration set by `define-configuration' or `customize-instance'."
   (dolist (class (sera:filter #'user-class-p (sym:package-classes* (nyxt-packages))))
     (setf (hooks:handlers-alist (slot-value class 'customize-hook)) nil))
   (dolist (method (mopu:generic-function-methods #'customize-instance))

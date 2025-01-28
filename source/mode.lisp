@@ -8,7 +8,10 @@
     :initform (list t)
     :initarg :toggler-command-p
     :type (cons boolean null)
-    :documentation "Whether to define a toggler command for the defined mode.")))
+    :documentation "Whether to define a toggler command for the defined mode."))
+  (:documentation "Metaclass for all the `mode's.
+Only used to mandate whether the mode needs a toggler command:
+`toggler-command-p'."))
 (export-always 'mode-class)
 
 (defmethod closer-mop:validate-superclass ((class mode-class)
@@ -23,11 +26,11 @@
                               name
                               `(lambda (&rest args
                                         &key (buffer (or (current-prompt-buffer) (current-buffer)))
-                                          (activate t explicit?)
+                                          (activate t activate-supplied-p)
                                         &allow-other-keys)
                                  ,(let ((*print-case* :downcase))
                                     (format nil "Toggle `~a'." name))
-                                 (declare (ignorable buffer activate explicit?))
+                                 (declare (ignorable buffer activate activate-supplied-p))
                                  (apply #'toggle-mode ',name args))
                               :global)))
           (setf (fdefinition name) command))
@@ -43,14 +46,15 @@
   ((buffer
     nil
     :type (maybe null buffer))
+   (visible-in-status-p
+    t
+    :documentation "Whether the mode is visible in the `status-buffer'.")
    (glyph
     nil
     :type (maybe string)
     :accessor nil
-    :documentation "A glyph used to represent this mode.")
-   (visible-in-status-p
-    t
-    :documentation "Whether the mode is visible in the status line.")
+    :documentation "A `status-buffer' indicator that mode is enabled, when
+`glyph-mode-presentation-p' is non-nil.")
    (rememberable-p
     t
     :documentation "Whether this mode is visible to auto-rules.")
@@ -74,9 +78,19 @@ The handlers take the mode as argument.")
   (:export-class-name-p t)
   (:export-accessor-names-p t)
   (:export-predicate-name-p t)
-  (:accessor-name-transformer (class*:make-name-transformer name))
   (:toggler-command-p nil)
-  (:metaclass mode-class))
+  (:metaclass mode-class)
+  (:documentation "Representation of Nyxt mode.
+Belongs to `buffer', has `keyscheme-map' and is/isn't `rememberable-p'.
+
+When `visible-in-status-p', shows mode name (or `glyph', when
+`glyph-mode-presentation-p') in status buffer.
+
+Define new modes with `define-mode'.
+
+Specify `enable' and `disable' methods to include mode-specific
+initialization/destruction or hook into `enable-hook' or `disable-hook' to know
+when it gets toggled."))
 
 (defmethod initialize-instance :after ((mode mode) &key)
   (when (eq 'mode (sera:class-name-of mode))
@@ -106,9 +120,9 @@ See also `disable'."))
   ;; FIXME: An easier way to initialize slots given initargs?
   (loop with slot-defs = (closer-mop:class-direct-slots (class-of mode))
         for (key value) on keys by #'cddr
-        do (alex:when-let ((slot-name (loop for slot-def in slot-defs
-                                            when (member key (c2mop:slot-definition-initargs slot-def))
-                                              do (return (c2cl:slot-definition-name slot-def)))))
+        do (when-let ((slot-name (loop for slot-def in slot-defs
+                                       when (member key (c2mop:slot-definition-initargs slot-def))
+                                         do (return (c2cl:slot-definition-name slot-def)))))
              ;; TODO: Maybe use writer methods, if present? It implies a risk of
              ;; runtime actions on not-yet-fully-initialized mode instances
              ;; (because enable is a kind of initialization too).
@@ -193,10 +207,10 @@ The `mode' superclass is automatically added if not present."
                    `((:export-class-name-p t)
                      (:export-accessor-names-p t)
                      (:export-predicate-name-p t)
-                     (:accessor-name-transformer (class*:make-name-transformer name))
                      (:metaclass mode-class)))))))
 
-(hooks:define-hook-type mode (function (mode)))
+(hooks:define-hook-type mode (function (mode))
+  "Hook acting on `mode's.")
 
 (export-always 'glyph)
 (defmethod glyph ((mode mode))
@@ -209,23 +223,21 @@ When unset, it corresponds to the mode name."
   (setf (slot-value mode 'glyph) glyph))
 
 (defmethod print-object ((mode mode) stream)
-  (if *print-escape*
-      (print-unreadable-object (mode stream :type t :identity t))
-      (let ((name (symbol-name (sera:class-name-of mode)))
-            (suffix "-MODE"))
-        (format stream "~(~a~)" (sera:string-replace
-                                 suffix name ""
-                                 :start (- (length name ) (length suffix)))))))
+  (format stream "~@(~a~)"
+          (sera:drop-suffix "-MODE"
+                            (symbol-name (sera:class-name-of mode)))))
 
 (sym:define-symbol-type mode (class)
-  (alex:when-let ((class (find-class sym:%symbol% nil)))
+  (when-let ((class (find-class sym:%symbol% nil)))
     (mopu:subclassp class (find-class 'mode))))
 
 (defun mode-class (symbol)
   (when (sym:mode-symbol-p symbol)
     (find-class symbol)))
 
-(defun resolve-user-symbol (designator type &optional (packages sym:*default-packages*))
+(defun resolve-user-symbol (designator type &optional (packages (append (nyxt-packages)
+                                                                        (nyxt-user-packages)
+                                                                        (nyxt-extension-packages))))
   "`nsymbols:resolve-symbol' wrapper, only resolving strings, keywords, and NYXT-USER symbols.
 Useful for user configuration smarts, returns unaltered DESIGNATOR otherwise."
   (etypecase designator
@@ -235,6 +247,52 @@ Useful for user configuration smarts, returns unaltered DESIGNATOR otherwise."
                 (sym:resolve-symbol designator type packages)
                 designator))))
 
+;; NOTE: We define it here so that it's available in spinneret-tags.lisp.
+(export-always 'resolve-backtick-quote-links)
+(defun resolve-backtick-quote-links (string parent-package)
+  "Return the STRING documentation with symbols surrounded by the (` ') pair
+turned into <a> links to their respective description page."
+  (labels ((resolve-as (symbol type)
+             (sym:resolve-symbol symbol type (list :nyxt :nyxt-user parent-package)))
+           (resolve-regex (target-string start end match-start match-end reg-starts reg-ends)
+             (declare (ignore start end reg-starts reg-ends))
+             ;; Excluding backtick & quote.
+             (let* ((name (subseq target-string (1+ match-start) (1- match-end)))
+                    (symbol (ignore-errors (uiop:safe-read-from-string
+                                            name :package parent-package :eof-error-p nil)))
+                    (function (and symbol
+                                   (fboundp symbol)
+                                   (resolve-as symbol :function)))
+                    (variable (when symbol
+                                (resolve-as symbol :variable)))
+                    (class (when symbol
+                             (resolve-as symbol :class)))
+                    ;; TODO: No way to determine the class reliably based on the slot name?
+                    ;; (slot (resolve-symbol name :slot (list :nyxt :nyxt-user *package*)))
+                    (url (cond
+                           ((and variable (not function) (not class))
+                            (nyxt-url 'describe-variable :variable variable))
+                           ((and class (not function) (not variable))
+                            (nyxt-url 'describe-class :class class))
+                           ((and function (not class) (not variable))
+                            (nyxt-url 'describe-function :fn function))
+                           (symbol
+                            (nyxt-url 'describe-any :input symbol))
+                           (t nil))))
+               (let ((*print-pretty* nil))
+                 ;; Disable pretty-printing to avoid spurious space insertion within links:
+                 ;; https://github.com/ruricolist/spinneret/issues/37#issuecomment-884740046
+                 (spinneret:with-html-string
+                   (if url
+                       (:a :href url (:code name))
+                       (:code name)))))))
+    (if (not (uiop:emptyp string))
+        ;; FIXME: Spaces are disallowed, but |one can use anything in a symbol|.
+        ;; Maybe allow it?  The problem then is that it increases the chances of
+        ;; false-positives when the "`" character is used for other reasons.
+        (ppcre:regex-replace-all "`[^'\\s]+'" string #'resolve-regex)
+        "")))
+
 (-> find-submode (sym:mode-symbol &optional buffer) (maybe mode))
 (export-always 'find-submode)
 (defun find-submode (mode-symbol &optional (buffer (current-buffer)))
@@ -242,7 +300,7 @@ Useful for user configuration smarts, returns unaltered DESIGNATOR otherwise."
 As a second value, return all matching submode instances.
 Return nil if mode is not found."
   (when (modable-buffer-p buffer)
-    (alex:if-let ((class (mode-class mode-symbol)))
+    (if-let ((class (mode-class mode-symbol)))
       (let ((results (sera:filter
                       (rcurry #'closer-mop:subclassp class)
                       (modes buffer)
@@ -265,7 +323,7 @@ The \"-mode\" suffix is automatically appended to MODE-KEYWORD if missing.
 This is convenience function for interactive use.
 For production code, see `find-submode' instead."
   (let ((mode-designator (sera:ensure-suffix (string mode-designator) "-MODE")))
-    (find-submode (sym:resolve-symbol mode-designator :mode)
+    (find-submode (resolve-user-symbol mode-designator :mode)
                   buffer)))
 
 (defun all-mode-symbols ()
@@ -278,17 +336,18 @@ For production code, see `find-submode' instead."
   (make-instance 'prompter:suggestion
                  :value mode
                  :attributes `(("Mode" ,(string-downcase (symbol-name mode)))
-                               ("Documentation" ,(or (first (sera:lines (documentation mode 'type)))
-                                                     ""))
+                               ("Documentation" ,(documentation-line mode 'type ""))
                                ("Package" ,(string-downcase (package-name (symbol-package mode)))))))
 
 (define-class mode-source (prompter:source)
   ((prompter:name "Modes")
-   (prompter:multi-selection-p t)
+   (prompter:enable-marks-p t)
    (prompter:constructor (sort (all-mode-symbols) #'string< :key #'symbol-name))
+   (prompter:filter-preprocessor #'prompter:filter-exact-matches)
    (prompter:suggestion-maker 'make-mode-suggestion))
   (:export-class-name-p t)
-  (:metaclass user-class))
+  (:metaclass user-class)
+  (:documentation "Source for all the existing modes."))
 
 (defmethod prompter:object-attributes ((mode mode) (source prompter:source))
   (declare (ignore source))
@@ -297,7 +356,7 @@ For production code, see `find-submode' instead."
 (define-class active-mode-source (mode-source)
   ((prompter:name "Active modes")
    (buffers '())
-   (prompter:multi-selection-p t)
+   (prompter:enable-marks-p t)
    (prompter:constructor (lambda (source)
                            (delete-duplicates
                             (mapcar
@@ -307,23 +366,24 @@ For production code, see `find-submode' instead."
                               (uiop:ensure-list (buffers source))))))))
   (:export-class-name-p t)
   (:export-accessor-names-p t)
-  (:accessor-name-transformer (class*:make-name-transformer name))
-  (:metaclass user-class))
+  (:metaclass user-class)
+  (:documentation "Source listing names of all the `enable'd modes in `buffers'."))
 
 (define-class inactive-mode-source (mode-source)
   ((prompter:name "Inactive modes")
    (buffers '())
-   (prompter:multi-selection-p t)
+   (prompter:enable-marks-p t)
    (prompter:constructor (lambda (source)
                            (let ((common-modes
                                    (reduce #'intersection
-                                           (mappend (compose #'name #'modes)
-                                                    (uiop:ensure-list (buffers source))))))
+                                           (mapcar (lambda (b)
+                                                     (mapcar #'name (modes b)))
+                                                   (uiop:ensure-list (buffers source))))))
                              (set-difference (all-mode-symbols) common-modes)))))
   (:export-class-name-p t)
   (:export-accessor-names-p t)
-  (:accessor-name-transformer (class*:make-name-transformer name))
-  (:metaclass user-class))
+  (:metaclass user-class)
+  (:documentation "Source listing names of modes not yet `enable'd (or `disable'd) in `buffers'."))
 
 (export-always 'enable-modes*)
 (defgeneric enable-modes* (modes buffers &rest args &key remember-p &allow-other-keys)
@@ -331,6 +391,7 @@ For production code, see `find-submode' instead."
   ;; (-> enable-modes* ((or sym:mode-symbol (list-of sym:mode-symbol))
   ;;                    (or buffer (list-of buffer))
   ;;                    &key &allow-other-keys) *)
+  ;; TODO: accept a list of mode objects as well as symbols?
   (:method (modes buffers &rest args &key &allow-other-keys)
     (let ((modes (uiop:ensure-list modes))
           (buffers (uiop:ensure-list buffers)))
@@ -347,12 +408,12 @@ For production code, see `find-submode' instead."
                 buffer)
               (sera:filter #'modable-buffer-p buffers))))
   (:documentation "Enable MODES in BUFFERS.
-ARGS are the keyword arguments for `make-instance' on MODES.
+ARGS are the keyword arguments for `make-instance'/`enable' on MODES.
 If REMEMBER-P is true, save active modes so that auto-rules don't override those."))
 
 (define-command enable-modes (&key
-                              (modes nil explicit-modes-p)
-                              (buffers (current-buffer) explicit-buffers-p))
+                              (modes nil modes-supplied-p)
+                              (buffers (current-buffer) buffers-supplied-p))
   "Enable MODES for BUFFERS prompting for either or both.
 MODES should be a list of mode symbols or a mode symbol.
 BUFFERS and MODES are automatically coerced into a list.
@@ -363,14 +424,14 @@ If it's a single buffer, return it directly (not as a list)."
   ;; case it's handy that this function does not error, it simply does nothing.
   ;; REVIEW: But we wrap commands into `with-protect' for this, don't we?
   (let* ((buffers (or buffers
-                      (unless explicit-buffers-p
+                      (unless buffers-supplied-p
                         (prompt
                          :prompt "Enable mode(s) for buffer(s)"
                          :sources (make-instance 'buffer-source
-                                                 :multi-selection-p t
-                                                 :return-actions '())))))
+                                                 :enable-marks-p t
+                                                 :actions-on-return '())))))
          (modes (or modes
-                    (unless explicit-modes-p
+                    (unless modes-supplied-p
                       (prompt
                        :prompt "Enable mode(s)"
                        :sources (make-instance 'inactive-mode-source
@@ -398,8 +459,8 @@ If it's a single buffer, return it directly (not as a list)."
   (:documentation "Disable MODES in BUFFERS.
 If REMEMBER-P is true, save active modes so that auto-rules don't override those."))
 
-(define-command disable-modes (&key (modes nil explicit-modes-p)
-                               (buffers (current-buffer) explicit-buffers-p))
+(define-command disable-modes (&key (modes nil modes-supplied-p)
+                               (buffers (current-buffer) buffers-supplied-p))
   "Disable MODES for BUFFERS.
 MODES should be a list of mode symbols.
 BUFFERS and MODES are automatically coerced into a list.
@@ -407,14 +468,14 @@ BUFFERS and MODES are automatically coerced into a list.
 If BUFFERS is a list, return it.
 If it's a single buffer, return it directly (not as a list)."
   (let* ((buffers (or buffers
-                      (unless explicit-buffers-p
+                      (unless buffers-supplied-p
                         (prompt
                          :prompt "Enable mode(s) for buffer(s)"
                          :sources (make-instance 'buffer-source
-                                                 :multi-selection-p t
-                                                 :return-actions '())))))
+                                                 :enable-marks-p t
+                                                 :actions-on-return '())))))
          (modes (or modes
-                    (unless explicit-modes-p
+                    (unless modes-supplied-p
                       (prompt
                        :prompt "Disable mode(s)"
                        :sources (make-instance 'active-mode-source
@@ -446,12 +507,12 @@ If it's a single buffer, return it directly (not as a list)."
 (defun toggle-mode (mode-sym
                     &rest args
                     &key (buffer (or (current-prompt-buffer) (current-buffer)))
-                      (activate t explicit?)
+                      (activate t activate-supplied-p)
                     &allow-other-keys)
   "Enable MODE-SYM if not already enabled, disable it otherwise."
   (when (modable-buffer-p buffer)
     (let ((existing-instance (find mode-sym (slot-value buffer 'modes) :key #'sera:class-name-of)))
-      (unless explicit?
+      (unless activate-supplied-p
         (setf activate (or (not existing-instance)
                            (not (enabled-p existing-instance)))))
       (if activate
@@ -465,27 +526,7 @@ If it's a single buffer, return it directly (not as a list)."
             (echo "~@(~a~) mode enabled." mode))
           (when existing-instance
             (disable existing-instance)
-            (echo "~@(~a~) mode disabled." existing-instance)))
-      (remember-on-mode-toggle mode-sym buffer :enabled-p activate))))
-
-(define-command-global reload-with-modes (&optional (buffer (current-buffer)))
-  "Reload the BUFFER with the queried modes.
-This bypasses auto-rules.
-Auto-rules are re-applied once the page is reloaded once again."
-  (let* ((modes-to-enable (prompt
-                           :prompt "Mark modes to enable, unmark to disable"
-                           :sources (make-instance 'mode-source
-                                                   :marks (mapcar #'sera:class-name-of (modes (current-buffer))))))
-         (modes-to-disable (set-difference (all-mode-symbols) modes-to-enable
-                                           :test #'string=)))
-    (hooks:once-on (request-resource-hook buffer)
-        (request-data)
-      (when modes-to-enable
-        (disable-modes* modes-to-disable buffer))
-      (when modes-to-disable
-        (enable-modes* modes-to-enable buffer))
-      request-data)
-    (reload-buffer buffer)))
+            (echo "~@(~a~) mode disabled." existing-instance))))))
 
 (export-always 'find-buffer)
 (defun find-buffer (mode-symbol)
@@ -496,48 +537,19 @@ Auto-rules are re-applied once the page is reloaded once again."
 
 (export-always 'keymap)
 (defmethod keymap ((mode mode))
-  "Return the keymap of MODE according to its buffer `keyscheme-map'.
-If there is no corresponding keymap, return nil."
+  "Return the `nkeymaps:keymap' of MODE according to its buffer `nyxt/mode/keyscheme::keyscheme'.
+If there is no corresponding keymap, return NIL."
   (keymaps:get-keymap (if (buffer mode)
                           (keyscheme (buffer mode))
                           keyscheme:cua)
                       (keyscheme-map mode)))
 
-(defmethod on-signal-notify-uri ((mode mode) url)
-  url)
-
-(defmethod on-signal-notify-title ((mode mode) title)
-  (on-signal-notify-uri mode (url (buffer mode)))
-  title)
-
-(defmethod on-signal-load-started ((mode mode) url)
-  url)
-
-(defmethod on-signal-load-redirected ((mode mode) url)
-  url)
-
-(defmethod on-signal-load-canceled ((mode mode) url)
-  url)
-
-(defmethod on-signal-load-committed ((mode mode) url)
-  url)
-
-(defmethod on-signal-load-finished ((mode mode) url)
-  url)
-
-(defmethod on-signal-load-failed ((mode mode) url)
-  url)
-
-(defmethod on-signal-button-press ((mode mode) button-key)
-  (declare (ignorable button-key))
+(defmethod url-sources ((mode mode) actions-on-return)
+  (declare (ignore actions-on-return))
   nil)
 
-(defmethod url-sources ((mode mode) return-actions)
-  (declare (ignore return-actions))
-  nil)
-
-(defmethod url-sources :around ((mode mode) return-actions)
-  (declare (ignore return-actions))
+(defmethod url-sources :around ((mode mode) actions-on-return)
+  (declare (ignore actions-on-return))
   (alex:ensure-list (call-next-method)))
 
 (defmethod s-serialization:serializable-slots ((object mode))

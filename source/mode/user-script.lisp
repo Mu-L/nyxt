@@ -1,9 +1,9 @@
 ;;;; SPDX-FileCopyrightText: Atlas Engineer LLC
 ;;;; SPDX-License-Identifier: BSD-3-Clause
 
-(nyxt:define-package :nyxt/user-script-mode
-    (:documentation "Mode to load 'user scripts', such as GreaseMonkey scripts."))
-(in-package :nyxt/user-script-mode)
+(nyxt:define-package :nyxt/mode/user-script
+  (:documentation "Package for `user-script-mode' to load so-called 'user scripts', such as GreaseMonkey scripts."))
+(in-package :nyxt/mode/user-script)
 
 (defun inject-user-scripts (scripts buffer)
   (mapcar (lambda (script) (ffi-buffer-add-user-script buffer script)) scripts))
@@ -46,12 +46,11 @@ If false, runs on the toplevel frame only.")
       :type (member :document-start :document-end :document-idle)
       :documentation "When to run the script.
 Possible values:
-- :document-start (page started loading).
-- :document-end (page loaded, resources aren't).
-- :document-idle (page and resources are loaded)."))
+- `:document-start' (page started loading).
+- `:document-end' (page loaded, resources aren't).
+- `:document-idle' (page and resources are loaded)."))
     (:export-class-name-p t)
     (:export-accessor-names-p t)
-    (:accessor-name-transformer (class*:make-name-transformer name))
     (:documentation "The Nyxt-internal representation of user scripts to bridge with the renderer.")
     (:metaclass user-class)))
 
@@ -62,7 +61,7 @@ Possible values:
   "A helper to get the URL to a SCRIPT string.
 Return:
 - a final URL;
-- a boolean when it's a file URL."
+- T when it's a file URL, NIL otherwise."
   (cond
     ((valid-url-p script)
      (let ((script (quri:uri script)))
@@ -119,14 +118,14 @@ Return:
                   (files:content script)
                   (code script))))
     (or
-     (sera:and-let* ((start-position (search "// ==UserScript==" code))
-                     (end-position (search "// ==/UserScript==" code))
-                     (meta (subseq code
-                                   (+ (1+ (length "// ==UserScript==")) start-position)
-                                   end-position)))
+     (and-let* ((start-position (search "// ==UserScript==" code))
+                (end-position (search "// ==/UserScript==" code))
+                (meta (subseq code
+                              (+ (1+ (length "// ==UserScript==")) start-position)
+                              end-position)))
        (flet ((getprop (prop)
-                (alex:when-let* ((regex (str:concat "// @" prop "\\s*(.*)"))
-                                 (raw-props (ppcre:all-matches-as-strings regex meta)))
+                (when-let* ((regex (str:concat "// @" prop "\\s*(.*)"))
+                            (raw-props (ppcre:all-matches-as-strings regex meta)))
                   (mapcar (lambda (raw-prop)
                             (multiple-value-bind (begin end reg-starts reg-ends)
                                 (ppcre:scan regex raw-prop)
@@ -176,7 +175,9 @@ Return:
 (export-always 'renderer-user-style)
 (defclass renderer-user-style ()
   ()
-  (:metaclass interface-class))
+  (:metaclass interface-class)
+  (:documentation "The basis for renderer-specific user style extensions.
+Should be redefined by the renderer."))
 
 (sera:eval-always
   (define-class user-style (renderer-user-style files:data-file nyxt-remote-file)
@@ -203,7 +204,6 @@ If false, runs on the toplevel frame only.")
 :USER styles override everything else."))
     (:export-class-name-p t)
     (:export-accessor-names-p t)
-    (:accessor-name-transformer (class*:make-name-transformer name))
     (:documentation "The Nyxt-internal representation of user styles to bridge with the renderer.")
     (:metaclass user-class)))
 
@@ -218,7 +218,9 @@ If false, runs on the toplevel frame only.")
     (setf (code style) (files:content style))))
 
 (define-mode user-script-mode ()
-  "Load user scripts such as GreaseMonkey scripts."
+  "Mode to manage user scripts such as GreaseMonkey scripts.
+The mode can manage multiple scripts.  Each `user-script' behaves following to
+its own independent settings."
   ((rememberable-p nil)
    (user-scripts
     nil
@@ -254,4 +256,6 @@ If false, runs on the toplevel frame only.")
 (export-always 'renderer-user-script)
 (defclass renderer-user-script ()
   ()
-  (:metaclass interface-class))
+  (:metaclass interface-class)
+  (:documentation "The basis for renderer-specific user scripts.
+Should be redefined by the renderer."))

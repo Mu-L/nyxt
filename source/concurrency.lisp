@@ -24,7 +24,7 @@ FORMAT-STRING and ARGS.
 As a special case, the first `:condition' keyword in ARGS is replaced with the
 raised condition."
   (alex:with-gensyms (c sub-c)
-    `(if (or *run-from-repl-p* *debug-on-error*)
+    `(if (or *run-from-repl-p*)
          (handler-case (progn ,@body)
            (prompt-buffer-canceled ()
              (log:debug "Prompt buffer interrupted")))
@@ -85,22 +85,19 @@ This supersedes `bt:make-thread' in Nyxt.  Don't use the latter unless you know
 what you are doing!"
   `(lparallel.thread-util:with-thread (:name ,(str:concat "Nyxt " name)
                                        :bindings (append '((*run-from-repl-p* . *run-from-repl-p*)
-                                                           (*headless-p* . *headless-p*)
-                                                           (*debug-on-error* . *debug-on-error*)
-                                                           (*interactive-p* . *interactive-p*))
+                                                           (*headless-p* . *headless-p*))
                                                          bt:*default-special-bindings*))
      (with-protect ("Error on separate thread: ~a" :condition)
        ,@body)))
 
-(defun evaluate (string &key interactive-p)
+(defun evaluate (string)
   "Evaluate all expressions in STRING and return the last result as a list of values.
 The list of values is useful when the last result is multi-valued, e.g. (values 'a 'b).
 You need not wrap multiple values in a PROGN, all top-level expressions are
 evaluated in order."
   (let ((channel (make-channel 2)))
     (run-thread "evaluator"
-      (let ((interactive-p interactive-p)
-            (*standard-output* (make-string-output-stream)))
+      (let ((*standard-output* (make-string-output-stream)))
         (calispel:!
          channel
          (with-input-from-string (input string)
@@ -108,9 +105,8 @@ evaluated in order."
             (last
              (mapcar (lambda (s-exp)
                        (multiple-value-list
-                        (let ((*interactive-p* interactive-p))
-                          (with-protect ("Error in s-exp evaluation: ~a" :condition)
-                            (eval s-exp)))))
+                        (with-protect ("Error in s-exp evaluation: ~a" :condition)
+                          (eval s-exp))))
                      (safe-slurp-stream-forms input))))))
         (calispel:! channel (get-output-stream-string *standard-output*))))
     (values (calispel:? channel) (calispel:? channel))))

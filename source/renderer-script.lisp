@@ -39,21 +39,63 @@ Examples:
 
 (export-always 'define-parenscript)
 (defmacro define-parenscript (script-name args &body script-body)
-  "Define parenscript function SCRIPT-NAME.
-SCRIPT-BODY must be a valid parenscript and will be wrapped in (PS:PS ...).
-Any Lisp expression must be wrapped in (PS:LISP ...).
+  "Define parenscript method SCRIPT-NAME with arguments ARGS.
+SCRIPT-BODY must be a valid parenscript and will be wrapped in `ps:ps'.
+Any Lisp expression must be wrapped in `ps:lisp'.
 
-The returned function sends the compiled Javascript to the current buffer webview.
-The function can be passed Lisp ARGS."
-  `(defmethod ,script-name ,args (ps-eval :buffer (current-buffer) ,@script-body)))
+The compiled Javascript runs in the current buffer.
+
+Since it is defined via `defmethod', it is extensible via method
+qualifiers (`:before', `:after', `:around')."
+  (multiple-value-bind (body declarations documentation)
+      (alex:parse-body script-body :documentation t)
+    (declare (ignore declarations))
+    `(defmethod ,script-name ,args
+       ,documentation
+       (ps-eval :buffer (current-buffer) ,@body))))
 
 (export-always 'define-parenscript-async)
 (defmacro define-parenscript-async (script-name args &body script-body)
   "Like `define-parenscript', but Javascript runs asynchronously."
-  `(defmethod ,script-name ,args (ps-eval :async t :buffer (current-buffer) ,@script-body)))
+  (multiple-value-bind (body declarations documentation)
+      (alex:parse-body script-body :documentation t)
+    (declare (ignore declarations))
+    `(defmethod ,script-name ,args
+       ,documentation
+       (ps-eval :async t :buffer (current-buffer) ,@body))))
 
 (export-always 'ps-labels)
 (defmacro ps-labels (&body args)
+  "Create `labels'-like Parenscript functions callable from Lisp.
+ARGS can start with :ASYNC and :BUFFER keyword args.
+- :BUFFER is the buffer to run the created functions in. Defaults to
+  `current-buffer'.
+- :ASYNC is whether the function runs asynchronously. Defaults to NIL, so the
+  bound functions return the result of JS evaluation synchronously.
+
+Bindings are similar to the `labels'/`flet' bindings. They have a structure of:
+\(NAME [:BUFFER BUFFER] [:ASYNC BOOLEAN] ARGS
+   &BODY BODY)
+
+Binding-specific :BUFFER and :ASYNC can override the `pl-labels'-global :BUFFER
+and :ASYNC.
+
+Example:
+\(ps-labels
+  :buffer some-buffer
+  :async t ;; Run functions asynchronously by default.
+  ((print-to-console
+    ;; Override the buffer to current one.
+    :buffer (current-buffer)
+    (something)
+    ;; Notice the `ps:lisp': args are Lisp values.
+    (ps:chain console (log (ps:stringify (ps:lisp something)))))
+   (add
+    ;; Override the :ASYNC for the function to be synchronous.
+    :async nil
+    (n1 n2)
+    (+ (ps:lisp n1) (ps:lisp n2))))
+  (print-to-console (add 5 200.8)))"
   (let* ((global-buffer (second (member :buffer args)))
          (global-async (second (member :async args)))
          (functions (find-if (lambda (e) (and (listp e) (every #'listp e)))
@@ -101,7 +143,7 @@ If `setf'-d to a list of two values -- set Y to `first' and X to `second' elemen
   (with-current-buffer buffer
     (let ((position (%document-scroll-position)))
       (when (listp position)
-        position ))))
+        position))))
 
 (defmethod (setf document-scroll-position) (value &optional (buffer (current-buffer)))
   (when value
@@ -112,17 +154,36 @@ If `setf'-d to a list of two values -- set Y to `first' and X to `second' elemen
 
 (export-always 'document-get-paragraph-contents)
 (define-parenscript document-get-paragraph-contents (&key (limit 100000))
+  "Get all the <p> elements text."
   (let ((result ""))
     (loop for element in (nyxt/ps:qsa document (list "p"))
           do (setf result (+ result
                              (ps:chain element text-content))))
     (ps:chain result (slice 0 (ps:lisp limit)))))
 
-(defun html-write (content &optional (buffer (current-buffer)))
+(export-always 'add-stylesheet)
+(defun add-stylesheet (id style &optional (buffer (current-buffer)))
+  "Set STYLE of element featuring ID."
   (ps-eval :async t :buffer buffer
-    (ps:chain document (write (ps:lisp content)))))
+    (unless (nyxt/ps:qs document (ps:lisp (str:concat "#" id)))
+      (ps:try
+       (ps:let ((style-element (ps:chain document (create-element "style"))))
+         (setf (ps:@ style-element id) (ps:lisp id))
+         (ps:chain document head (append-child style-element))
+         (setf (ps:chain style-element inner-text) (ps:lisp style)))
+       (:catch (error))))))
+
+(defun html-write (html-document &optional (buffer (current-buffer)))
+  "Set BUFFER's document to HTML-DOCUMENT.
+Overwrites the whole HTML document (head and body elements included)."
+  ;; Don't use document.write().
+  ;; See https://developer.mozilla.org/en-US/docs/Web/API/Document/write.
+  (ps-eval :async t :buffer buffer
+    (setf (ps:chain document (get-elements-by-tag-name "html") 0 |innerHTML|)
+          (ps:lisp html-document))))
 
 (defun html-set (content &optional (buffer (current-buffer)))
+  "Set BUFFER contents to CONTENT."
   (ps-eval :async t :buffer buffer
     (setf (ps:@ document body |innerHTML|) (ps:lisp content))))
 
@@ -140,15 +201,13 @@ If `setf'-d to a list of two values -- set Y to `first' and X to `second' elemen
   (gethash sym *nyxt-url-commands*))
 
 (deftype internal-page-symbol ()
+  "Whether the value is a symbol having an `internal-page' associated to it."
   `(and symbol (satisfies internal-page-symbol-p)))
 
 (export-always 'match-internal-page)
 (defun match-internal-page (symbol)
   "Return a predicate for URL designators matching the page of SYMBOL name."
-  #'(lambda (url)
-      (and (str:starts-with-p "nyxt:" (render-url url))
-           (eq (parse-nyxt-url url)
-               symbol))))
+  #'(lambda (url) (eq (internal-page-name url) symbol)))
 
 (define-class internal-page (command)
   ((dynamic-title ; Not `title' so that it does not clash with other `title' methods.
@@ -177,7 +236,6 @@ is loaded.")
 invoked.
 The nyxt:// URL query arguments are passed to this function as keyword arguments."))
   (:metaclass closer-mop:funcallable-standard-class)
-  (:accessor-name-transformer (class*:make-name-transformer name))
   (:export-class-name-p t)
   (:export-accessor-names-p t)
   (:documentation "Each instance is a unique internal page generator for the
@@ -214,18 +272,20 @@ See `find-internal-page-buffer'."))
                 (destructuring-bind (contents &optional (type "text/html;charset=utf8") (status 200)
                                                 headers reason)
                     (multiple-value-list (apply (compile nil lambda-expression) args))
-                  (when (str:starts-with-p "text/html" type)
-                    (when (or (null contents)
-                              (< (length (clss:select "head, body" (plump:parse contents))) 2))
-                      (setf contents
-                            (spinneret:with-html-string
-                              (:head
-                               (:title (progn
-                                         (apply #'dynamic-title
-                                                (gethash (name page) *nyxt-url-commands*)
-                                                args)))
-                               (:style (:raw (style (current-buffer)))))
-                              (:body (:raw contents))))))
+                  (when (and (str:starts-with-p "text/html" type)
+                             (or (null contents)
+                                 (< (length (clss:select "head, body" (plump:parse contents)))
+                                    2)))
+                    (setf contents
+                          (spinneret:with-html-string
+                            (:doctype)
+                            (:html
+                             (:head
+                              (:title (apply #'dynamic-title
+                                             (gethash (name page) *nyxt-url-commands*)
+                                             args))
+                              (:style (:raw (style (find-internal-page-buffer (name page))))))
+                             (:body (:raw contents))))))
                   (values contents type status headers reason))))))))
 
 (defmethod (setf page-mode) (new-value (page internal-page))
@@ -247,7 +307,9 @@ See `find-internal-page-buffer'."))
          `(lambda (,@(unless rest '(&rest args)) ,@arglist)
             ,@(when documentation (list documentation))
             (declare (ignorable ,@(mappend #'cdar keywords) ,(or rest 'args)))
-            (funcall #'buffer-load-internal-page-focus (name ,page) ,@(mappend #'first keywords))))))))
+            (funcall #'buffer-load-internal-page-focus
+                     (name ,page)
+                     ,@(mappend #'first keywords))))))))
 
 (defmethod initialize-instance :after ((page internal-page) &key form page-mode &allow-other-keys)
   "Register PAGE into the globally known nyxt:// URLs."
@@ -268,52 +330,33 @@ See `find-internal-page-buffer'."))
 
 (defmethod dynamic-title ((page internal-page) &rest args)
   (with-slots ((title dynamic-title)) page
-    (cond
-      ((stringp title)
-       title)
-      ((functionp title)
-       (apply title args))
-      (t
-       (format nil "*~a*" (string-downcase (name page)))))))
-
-(defun internal-page-name (url)
-  (when (string= "nyxt" (quri:uri-scheme url))
-    (uiop:safe-read-from-string
-     (str:upcase (quri:uri-path url)) :package :nyxt)))
+    (cond ((stringp title) title)
+          ((functionp title) (apply title args))
+          (t (format nil "*~a*" (string-downcase (name page)))))))
 
 ;; (-> find-internal-page-buffer (internal-page-symbol) (maybe buffer))
 (defun find-internal-page-buffer (name) ; TODO: Test if CCL can catch bad calls at compile-time.
   "Return first buffer which URL is a NAME `internal-page'."
   (find name (buffer-list) :key (compose #'internal-page-name #'url)))
 
+(-> find-url-internal-page ((or quri:uri string null)) internal-page)
 (defun find-url-internal-page (url)
-  "Return the `internal-page' to which URL corresponds."
-  (and (equal "nyxt" (quri:uri-scheme url))
-       (gethash
-        (internal-page-name url)
-        *nyxt-url-commands*)))
+  "Return the `internal-page' corresponding to URL."
+  (gethash (internal-page-name url) *nyxt-url-commands*))
 
 (export-always 'buffer-load-internal-page-focus)
 (defun buffer-load-internal-page-focus (name &rest args)
-  "Make internal-page for NAME (a symbol) and switch to it.
-If it already exists, reload it.
-ARGS are passed to the internal page parameters.
-
-Return internal-page buffer."
-  (flet ((ensure-internal-page-buffer (name)
-           "Return first buffer which URL is a NAME internal page, or create it if it does
-not exist."
-           (or (find-internal-page-buffer name)
-               (make-instance 'web-buffer))))
-    (set-current-buffer
-     (buffer-load (apply #'nyxt-url name args)
-                  :buffer (ensure-internal-page-buffer name)))))
+  "Return internal page with name NAME and focus it.
+ARGS are passed as internal page parameters."
+  (set-current-buffer (buffer-load (apply #'nyxt-url name args)
+                                   :buffer (or (find-internal-page-buffer name)
+                                               (make-instance 'web-buffer)))))
 
 (export-always 'define-internal-page)
 (defmacro define-internal-page (name (&rest form-args) (&rest initargs) &body body)
   "Define an `internal-page'.
-FORM-ARGS or the `internal-page' `form' keyword arguments.
-INITARGS are passed to the `internal-page' initialization arguments
+FORM-ARGS are the `internal-page' `form' keyword arguments.
+INITARGS are passed to the `internal-page' initialization arguments.
 
 Example:
 
@@ -374,4 +417,3 @@ Only keyword and rest arguments are accepted."
 Only keyword arguments are accepted."
   `(prog1 (define-internal-page-command ,name (,@arglist) (,buffer-var ,title ,mode) ,@body)
      (setf (slot-value #',name 'visibility) :global)))
-

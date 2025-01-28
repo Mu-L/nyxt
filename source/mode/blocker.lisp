@@ -1,9 +1,17 @@
 ;;;; SPDX-FileCopyrightText: Atlas Engineer LLC
 ;;;; SPDX-License-Identifier: BSD-3-Clause
 
-(nyxt:define-package :nyxt/blocker-mode
-    (:documentation "Block resource queries for listed hosts."))
-(in-package :nyxt/blocker-mode)
+(nyxt:define-package :nyxt/mode/blocker
+  (:documentation "Package for `blocker-mode', mode to block requests for listed hosts.
+`blocker-mode' relies on:
+- `hostlist' as the hostlist representation.
+- `*default-hostlist*' as the most reliable hostlist.
+- `load-hostlists' as the function forcing hostlist update and the user-space
+  `update-hostlists' commands relying on it.
+
+- `request-resource-block' as the hook handler that does all the automagic
+  blocking."))
+(in-package :nyxt/mode/blocker)
 
 ;; TODO: Add convenient interface to block hosts depending on the current URL.
 
@@ -20,9 +28,17 @@ This is useful to reference hosts manually instead of via `nfiles:url'.")
 seconds."))
   (:export-class-name-p t)
   (:export-accessor-names-p t)
-  (:accessor-name-transformer (class*:make-name-transformer name))
   (:documentation "A hostlist `blocker-mode' can use for its `hostlists' slot.
 See `*default-hostlist*' for an example."))
+
+(defmethod hosts :around ((hostlist hostlist))
+  (or (call-next-method)
+      (let ((path (files:expand hostlist)))
+        (unless (uiop:file-exists-p path)
+          (echo "Updating hostlist ~s..." path))
+        (setf (slot-value hostlist 'hosts)
+              (files:content hostlist
+                             :force-update (not (uiop:file-exists-p path)))))))
 
 (export-always 'make-hostlist)
 (defun make-hostlist (&rest args)
@@ -41,27 +57,40 @@ See the `hostlist' class documentation."
 (define-mode blocker-mode ()
   "Enable blocking of listed hosts.
 To customize the list of blocked hosts, set the `hostlists' slot.
-See the `hostlist' class documentation.
+To force hostlist update, use `update-hostlists'.
 
 Example:
 
 \(defvar *my-blocked-hosts*
-  (nyxt/blocker-mode:make-hostlist
+  (nyxt/mode/blocker:make-hostlist
    :hosts '(\"platform.twitter.com\"
             \"syndication.twitter.com\"
             \"m.media-amazon.com\")))
 
-\(define-mode my-blocker-mode (nyxt/blocker-mode:blocker-mode)
+\(define-mode my-blocker-mode (nyxt/mode/blocker:blocker-mode)
   \"Blocker mode with custom hosts from `*my-blocked-hosts*'.\"
-  ((nyxt/blocker-mode:hostlists (list *my-blocked-hosts* nyxt/blocker-mode:*default-hostlist*))))
+  ((nyxt/mode/blocker:hostlists (list *my-blocked-hosts* nyxt/mode/blocker:*default-hostlist*))))
 
-\(define-configuration buffer
-  ((default-modes (append '(my-blocker-mode) %slot-default%))))"
+\(define-configuration :buffer
+  ((default-modes (append '(my-blocker-mode) %slot-default%))))
+
+See `nyxt/mode/blocker' package documentation for implementation details and
+internal programming APIs."
   ((hostlists (list *default-hostlist*))
    (blocked-hosts
     (make-hash-table :test 'equal)
     :export nil
     :documentation "The set of host names to block.")))
+
+(defmethod blocked-hosts :around ((blocker-mode blocker-mode))
+  (let ((value (call-next-method)))
+    (unless (plusp (hash-table-count value))
+      (dolist (hostlist (hostlists blocker-mode))
+        ;; TODO: Allow running in the background, but warning, it could leak
+        ;; personal information to undesired third-party.
+        (dolist (host (hosts hostlist))
+          (setf (gethash host value) host))))
+    value))
 
 (defmethod enable ((mode blocker-mode) &key)
   (when (network-buffer-p (buffer mode))
@@ -94,21 +123,6 @@ This gives more integrity guarantees to the user and allows external manipulatio
                      (custom-hosts? line))
             collect (second (str:split " " line)))))
 
-(-> load-hostlists (blocker-mode &key (:force-update-p boolean)) t)
-(defun load-hostlists (blocker-mode &key force-update-p)
-  "Load BLOCKER-MODE's hostlists into `blocked-hosts' (in the background)."
-  (clrhash (blocked-hosts blocker-mode))
-  (dolist (hostlist (hostlists blocker-mode))
-    ;; TODO: Allow running in the background, but warning, it could leak
-    ;; personal information to undesired third-party.
-    (dolist (host (or (hosts hostlist)
-                      (let ((path (files:expand hostlist)))
-                        (unless (uiop:file-exists-p path)
-                          (echo "Updating hostlist ~s..." path))
-                        (files:content hostlist
-                                       :force-update force-update-p))))
-      (setf (gethash host (blocked-hosts blocker-mode)) host))))
-
 (defmethod blocklisted-host-p ((mode blocker-mode) host)
   "Return non-nil of HOST if found in the hostlists of MODE.
 Return nil if MODE's hostlist cannot be parsed."
@@ -133,10 +147,10 @@ This is an acceptable handler for `request-resource-hook'."
 
 (defmethod s-serialization:serializable-slots ((object blocker-mode))
   "Discard hostlists which can get pretty big."
-  (delete 'nyxt/blocker-mode::hostlists
+  (delete 'nyxt/mode/blocker::hostlists
           (mapcar #'closer-mop:slot-definition-name
                   (closer-mop:class-slots (class-of object)))))
 
-(define-command update-hostlists (&optional (blocker-mode (find-submode 'nyxt/blocker-mode:blocker-mode (current-buffer))))
+(define-command update-hostlists (&optional (blocker-mode (find-submode 'nyxt/mode/blocker:blocker-mode (current-buffer))))
   "Forces update for all the hostlists of `blocker-mode'."
-  (load-hostlists blocker-mode :force-update-p t))
+  (clrhash (blocked-hosts blocker-mode)))

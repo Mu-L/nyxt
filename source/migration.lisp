@@ -23,9 +23,6 @@ we cannot predict the package in which it happened.")
 NIL means suggestion concerns all versions.")
    (tip
     ""
-    :export t
-    :writer t
-    :reader nil
     :type (or cons string function)
     :documentation "Suggestion how to update the symbols.
 It can be initialized with a string or a form; if the latter, it's automatically
@@ -34,11 +31,12 @@ This is useful to delay the evaluation of the tip until it's rendered."))
   (:export-class-name-p t)
   (:export-accessor-names-p t)
   (:export-predicate-name-p t)
-  (:accessor-name-transformer (class*:make-name-transformer name)))
+  (:documentation "Representation of migration suggestion.
+`symbols' are the offending ones deprecated in `version'."))
 
 (defmethod print-object ((object suggestion) stream)
-  (print-unreadable-object (object stream :type t :identity t)
-    (format stream "~a" (symbols  object))))
+  (print-unreadable-object (object stream :type t)
+    (format stream "~a" (symbols object))))
 
 (defun suggestion= (suggestion1 suggestion2)
   (and (string= (version suggestion1)
@@ -70,10 +68,11 @@ Order is stable."
           #'string<
           :key (compose #'first #'uiop:ensure-list #'symbols))))
 
-(defmethod tip ((suggestion suggestion))
-  (if (stringp (slot-value suggestion 'tip))
-      (slot-value suggestion 'tip)
-      (funcall (slot-value suggestion 'tip))))
+(defmethod tip :around ((suggestion suggestion))
+  (let ((value (call-next-method)))
+    (if (stringp value)
+        value
+        (funcall value))))
 
 (defmethod render-version-migration (major-version)
   (spinneret:with-html-string
@@ -81,8 +80,8 @@ Order is stable."
      (:h2 "For major version " major-version)
      (:table
       (:tr
-       (:td "Concerned symbols")
-       (:td "Suggestion"))
+       (:th "Concerned symbols")
+       (:th "Suggestion"))
       (dolist (suggestion (version-suggestions major-version))
         (:tr
          (:td (format nil "~{~a~^, ~}" (symbols suggestion)))
@@ -100,8 +99,9 @@ major versions."
 
 (export-always 'find-suggestions)
 (defun find-suggestions (string)
-  (alex:when-let ((sym (ignore-errors (uiop:safe-read-from-string
-                                       string :package (find-package :nyxt)))))
+  "Find the migration suggestions that match the symbol from STRING."
+  (when-let ((sym (ignore-errors (uiop:safe-read-from-string string
+                                                             :package (find-package :nyxt)))))
     (gethash (symbol-name sym) +migration-suggestions+)))
 
 (defmacro define-migration (major-version-string &body body)
@@ -115,6 +115,92 @@ major versions."
                                                         `(lambda () (spinneret:with-html-string ,tip)))
                                               :version ,major-version-string)
                               result)))))
+
+(define-migration "4"
+  (modifier-translator)
+  (:p "See slot " (:code "modifier-plist") ".")
+
+  (search-engines)
+  (:p "Moved to " (:nxref :slot 'search-engines :class-name 'browser) ".")
+
+  (search-auto-complete-p)
+  (:p "Renamed and moved to "
+      (:nxref :slot 'search-engine-suggestions-p :class-name 'browser) ".")
+
+  (search-always-auto-complete-p)
+  (:p "Deleted.")
+
+  (ffi-buffer-load-html)
+  (:p "Deleted.")
+
+  (override-map)
+  (:p "Deleted.")
+
+  (select-all)
+  (:p "Deleted in favor of "
+      (:nxref :command 'nyxt/mode/prompt-buffer:select-input-text) ".")
+
+  (toggle-actions-on-current-suggestion-enabled)
+  (:p "Deleted in favor of "
+      (:nxref :command 'nyxt/mode/prompt-buffer:toggle-actions-on-current-suggestion)
+      ".")
+
+  (hide-single-source-header-p)
+  (:p "Deleted.")
+
+  (prompt-buffer-open-height)
+  (:p "Deleted since " (:nxref :slot 'height :class-name 'prompt-buffer) " suffices.")
+
+  (status-buffer-position)
+  (:p "Deleted.")
+
+  (hints-offset-x)
+  (:p "Deleted in favor of "
+      (:nxref :slot 'nyxt/mode/hint:x-translation :class-name 'nyxt/mode/hint:hint-mode) ".")
+
+  (hints-offset-y)
+  (:p "Deleted in favor of "
+      (:nxref :slot 'nyxt/mode/hint:y-translation :class-name 'nyxt/mode/hint:hint-mode) ".")
+
+  (message-buffer-height)
+  (:p "Deleted in favor of " (:nxref :slot 'height :class-name 'message-buffer) ".")
+
+  (message-buffer-style)
+  (:p "Deleted in favor of " (:nxref :slot 'style :class-name 'message-buffer) ".")
+
+  (ffi-window-message-buffer-height)
+  (:p "Deleted since it is now handled by " (:nxref :function 'ffi-height) ".")
+
+  (external-editor-program)
+  (:p "No support for lists as a value.  Strings are the only valid values.")
+
+  (conservative-history-movement-p)
+  (:p "Deleted in favor of " (:nxref :slot 'global-history-p :class-name 'buffer) ".")
+
+  (nyxt/mode/repl
+   nyxt/mode/no-procrastinate
+   nyxt/mode/preview
+   nyxt/mode/record-input-field
+   nyxt/mode/remembrance
+   nyxt/mode/tts)
+  (:p "Deleted modes.")
+
+  (copy-placeholder
+   #:clean-configuration
+   dashboard
+   duplicate-buffer
+   duplicate-buffer-with-current-modes
+   follow-hint-with-current-modes-new-buffer
+   force-reload-buffers
+   go-next
+   go-previous
+   go-to-homepage
+   go-up
+   print-bindings
+   reload-buffer
+   reload-with-modes
+   resume-prompt)
+  (:p "Deleted commands."))
 
 (define-migration "3"
   (%slot-default)
@@ -132,8 +218,8 @@ major versions."
   (:p (:nxref :variable 'nyxt:*log-file*))
 
   (annotations-file)
-  (:p (:nxref :slot 'nyxt/annotate-mode:annotations-file :class-name 'nyxt/annotate-mode:annotate-mode)
-      " is in " (:nxref :class-name 'nyxt/annotate-mode:annotate-mode) ".")
+  (:p (:nxref :slot 'nyxt/mode/annotate:annotations-file :class-name 'nyxt/mode/annotate:annotate-mode)
+      " is in " (:nxref :class-name 'nyxt/mode/annotate:annotate-mode) ".")
 
   (auto-mode-rules-file)
   (:p (:code "auto-rules-file") "(previously " (:code "auto-mode-rules-file")
@@ -141,8 +227,8 @@ major versions."
       ", like all the other mode-related settings from the deprecated auto-mode.")
 
   (bookmarks-file)
-  (:p (:nxref :slot 'nyxt/bookmark-mode:bookmarks-file :class-name 'nyxt/bookmark-mode:bookmark-mode)
-      " is in " (:nxref :class-name 'nyxt/bookmark-mode:bookmark-mode) ".")
+  (:p (:nxref :slot 'nyxt/mode/bookmark:bookmarks-file :class-name 'nyxt/mode/bookmark:bookmark-mode)
+      " is in " (:nxref :class-name 'nyxt/mode/bookmark:bookmark-mode) ".")
 
   (expand-path)
   (:p (:code "expand-path") " is replaced by " (:nxref :function 'files:expand) ".")
@@ -160,7 +246,7 @@ major versions."
       (:code "copy-password-prompt-details") ", "
       (:code "save-new-password") "  and "
       (:code "copy-username")
-      " have been moved to the " (:code "nyxt/password-mode") " mode package.")
+      " have been moved to the " (:code "nyxt/mode/password") " mode package.")
 
   (session-restore-prompt)
   (:p (:code "session-restore-prompt") " is now "
@@ -176,4 +262,274 @@ major versions."
 
   (*after-init-hook* *after-startup-hook*)
   (:p "Those are " (:nxref :slot 'after-init-hook :class-name 'browser) " and "
-      (:nxref :slot 'after-startup-hook :class-name 'browser) " now."))
+      (:nxref :slot 'after-startup-hook :class-name 'browser) " now.")
+
+  (auto-follow-hints-p compute-hints-in-view-port-p fit-to-prompt-p)
+  (:p "Deleted in favor of "
+      (:nxref :slot 'nyxt/mode/hint:hinting-type :class-name 'nyxt/mode/hint:hint-mode)
+      ".")
+
+  nyxt/annotate-mode
+  (:p "Renamed to " (:nxref :class-name 'nyxt/mode/annotate) "."
+      " Query replace the regexp "
+      (:code "nyxt/\([a-z-]*\)-mode") " with " (:code "nyxt/mode/\\1") ".")
+
+  nyxt/autofill-mode
+  (:p "Renamed to " (:nxref :class-name 'nyxt/mode/autofill) "."
+      " Query replace the regexp "
+      (:code "nyxt/\([a-z-]*\)-mode") " with " (:code "nyxt/mode/\\1") ".")
+
+  nyxt/blocker-mode
+  (:p "Renamed to " (:nxref :class-name 'nyxt/mode/blocker) "."
+      " Query replace the regexp "
+      (:code "nyxt/\([a-z-]*\)-mode") " with " (:code "nyxt/mode/\\1") ".")
+
+  nyxt/bookmark-frequent-visits
+  (:p "Renamed to " (:nxref :class-name 'nyxt/mode/bookmark-frequent-visits) "."
+      " Query replace the regexp "
+      (:code "nyxt/\([a-z-]*\)-mode") " with " (:code "nyxt/mode/\\1") ".")
+
+  nyxt/bookmark-mode
+  (:p "Renamed to " (:nxref :class-name 'nyxt/mode/bookmark) "."
+      " Query replace the regexp "
+      (:code "nyxt/\([a-z-]*\)-mode") " with " (:code "nyxt/mode/\\1") ".")
+
+  nyxt/bookmarklets-mode
+  (:p "Renamed to " (:nxref :class-name 'nyxt/mode/bookmarklets) "."
+      " Query replace the regexp "
+      (:code "nyxt/\([a-z-]*\)-mode") " with " (:code "nyxt/mode/\\1") ".")
+
+  nyxt/buffer-listing-mode
+  (:p "Renamed to " (:nxref :class-name 'nyxt/mode/buffer-listing) "."
+      " Query replace the regexp "
+      (:code "nyxt/\([a-z-]*\)-mode") " with " (:code "nyxt/mode/\\1") ".")
+
+  nyxt/certificate-exception-mode
+  (:p "Renamed to " (:nxref :class-name 'nyxt/mode/certificate-exception) "."
+      " Query replace the regexp "
+      (:code "nyxt/\([a-z-]*\)-mode") " with " (:code "nyxt/mode/\\1") ".")
+
+  nyxt/cruise-control-mode
+  (:p "Renamed to " (:nxref :class-name 'nyxt/mode/cruise-control) "."
+      " Query replace the regexp "
+      (:code "nyxt/\([a-z-]*\)-mode") " with " (:code "nyxt/mode/\\1") ".")
+
+  nyxt/document-mode
+  (:p "Renamed to " (:nxref :class-name 'nyxt/mode/document) "."
+      " Query replace the regexp "
+      (:code "nyxt/\([a-z-]*\)-mode") " with " (:code "nyxt/mode/\\1") ".")
+
+  nyxt/download-mode
+  (:p "Renamed to " (:nxref :class-name 'nyxt/mode/download) "."
+      " Query replace the regexp "
+      (:code "nyxt/\([a-z-]*\)-mode") " with " (:code "nyxt/mode/\\1") ".")
+
+  nyxt/editor-mode
+  (:p "Renamed to " (:nxref :class-name 'nyxt/mode/editor) "."
+      " Query replace the regexp "
+      (:code "nyxt/\([a-z-]*\)-mode") " with " (:code "nyxt/mode/\\1") ".")
+
+  nyxt/emacs-mode
+  (:p "Renamed to " (:nxref :class-name 'nyxt/mode/emacs) "."
+      " Query replace the regexp "
+      (:code "nyxt/\([a-z-]*\)-mode") " with " (:code "nyxt/mode/\\1") ".")
+
+  nyxt/expedition-mode
+  (:p "Renamed to " (:nxref :class-name 'nyxt/mode/expedition) "."
+      " Query replace the regexp "
+      (:code "nyxt/\([a-z-]*\)-mode") " with " (:code "nyxt/mode/\\1") ".")
+
+  nyxt/file-manager-mode
+  (:p "Renamed to " (:nxref :class-name 'nyxt/mode/file-manager) "."
+      " Query replace the regexp "
+      (:code "nyxt/\([a-z-]*\)-mode") " with " (:code "nyxt/mode/\\1") ".")
+
+  nyxt/force-https-mode
+  (:p "Renamed to " (:nxref :class-name 'nyxt/mode/force-https) "."
+      " Query replace the regexp "
+      (:code "nyxt/\([a-z-]*\)-mode") " with " (:code "nyxt/mode/\\1") ".")
+
+  nyxt/help-mode
+  (:p "Renamed to " (:nxref :class-name 'nyxt/mode/help) "."
+      " Query replace the regexp "
+      (:code "nyxt/\([a-z-]*\)-mode") " with " (:code "nyxt/mode/\\1") ".")
+
+  nyxt/hint-prompt-buffer-mode
+  (:p "Renamed to " (:nxref :class-name 'nyxt/mode/hint-prompt-buffer) "."
+      " Query replace the regexp "
+      (:code "nyxt/\([a-z-]*\)-mode") " with " (:code "nyxt/mode/\\1") ".")
+
+  nyxt/hint-mode
+  (:p "Renamed to " (:nxref :class-name 'nyxt/mode/hint) "."
+      " Query replace the regexp "
+      (:code "nyxt/\([a-z-]*\)-mode") " with " (:code "nyxt/mode/\\1") ".")
+
+  nyxt/history-tree-mode
+  (:p "Renamed to " (:nxref :class-name 'nyxt/mode/history-tree) "."
+      " Query replace the regexp "
+      (:code "nyxt/\([a-z-]*\)-mode") " with " (:code "nyxt/mode/\\1") ".")
+
+  nyxt/history-mode
+  (:p "Renamed to " (:nxref :class-name 'nyxt/mode/history) "."
+      " Query replace the regexp "
+      (:code "nyxt/\([a-z-]*\)-mode") " with " (:code "nyxt/mode/\\1") ".")
+
+  nyxt/input-edit-mode
+  (:p "Renamed to " (:nxref :class-name 'nyxt/mode/input-edit) "."
+      " Query replace the regexp "
+      (:code "nyxt/\([a-z-]*\)-mode") " with " (:code "nyxt/mode/\\1") ".")
+
+  nyxt/keyscheme-mode
+  (:p "Renamed to " (:nxref :class-name 'nyxt/mode/keyscheme) "."
+      " Query replace the regexp "
+      (:code "nyxt/\([a-z-]*\)-mode") " with " (:code "nyxt/mode/\\1") ".")
+
+  nyxt/list-history-mode
+  (:p "Renamed to " (:nxref :class-name 'nyxt/mode/list-history) "."
+      " Query replace the regexp "
+      (:code "nyxt/\([a-z-]*\)-mode") " with " (:code "nyxt/mode/\\1") ".")
+
+  nyxt/macro-edit-mode
+  (:p "Renamed to " (:nxref :class-name 'nyxt/mode/macro-edit) "."
+      " Query replace the regexp "
+      (:code "nyxt/\([a-z-]*\)-mode") " with " (:code "nyxt/mode/\\1") ".")
+
+  nyxt/message-mode
+  (:p "Renamed to " (:nxref :class-name 'nyxt/mode/message) "."
+      " Query replace the regexp "
+      (:code "nyxt/\([a-z-]*\)-mode") " with " (:code "nyxt/mode/\\1") ".")
+
+  nyxt/no-image-mode
+  (:p "Renamed to " (:nxref :class-name 'nyxt/mode/no-image) "."
+      " Query replace the regexp "
+      (:code "nyxt/\([a-z-]*\)-mode") " with " (:code "nyxt/mode/\\1") ".")
+
+  nyxt/no-procrastinate-mode
+  (:p "Renamed to " (:nxref :class-name 'nyxt/mode/no-procrastinate) "."
+      " Query replace the regexp "
+      (:code "nyxt/\([a-z-]*\)-mode") " with " (:code "nyxt/mode/\\1") ".")
+
+  nyxt/no-script-mode
+  (:p "Renamed to " (:nxref :class-name 'nyxt/mode/no-script) "."
+      " Query replace the regexp "
+      (:code "nyxt/\([a-z-]*\)-mode") " with " (:code "nyxt/mode/\\1") ".")
+
+  nyxt/no-sound-mode
+  (:p "Renamed to " (:nxref :class-name 'nyxt/mode/no-sound) "."
+      " Query replace the regexp "
+      (:code "nyxt/\([a-z-]*\)-mode") " with " (:code "nyxt/mode/\\1") ".")
+
+  nyxt/no-webgl-mode
+  (:p "Renamed to " (:nxref :class-name 'nyxt/mode/no-webgl) "."
+      " Query replace the regexp "
+      (:code "nyxt/\([a-z-]*\)-mode") " with " (:code "nyxt/mode/\\1") ".")
+
+  nyxt/passthrough-mode
+  (:p "Renamed to " (:nxref :class-name 'nyxt/mode/passthrough) "."
+      " Query replace the regexp "
+      (:code "nyxt/\([a-z-]*\)-mode") " with " (:code "nyxt/mode/\\1") ".")
+
+  nyxt/password-mode
+  (:p "Renamed to " (:nxref :class-name 'nyxt/mode/password) "."
+      " Query replace the regexp "
+      (:code "nyxt/\([a-z-]*\)-mode") " with " (:code "nyxt/mode/\\1") ".")
+
+  nyxt/preview-mode
+  (:p "Renamed to " (:code "nyxt/mode/preview") "."
+      " Query replace the regexp "
+      (:code "nyxt/\([a-z-]*\)-mode") " with " (:code "nyxt/mode/\\1") ".")
+
+  nyxt/process-mode
+  (:p "Renamed to " (:nxref :class-name 'nyxt/mode/process) "."
+      " Query replace the regexp "
+      (:code "nyxt/\([a-z-]*\)-mode") " with " (:code "nyxt/mode/\\1") ".")
+
+  nyxt/prompt-buffer-mode
+  (:p "Renamed to " (:nxref :class-name 'nyxt/mode/prompt-buffer) "."
+      " Query replace the regexp "
+      (:code "nyxt/\([a-z-]*\)-mode") " with " (:code "nyxt/mode/\\1") ".")
+
+  nyxt/proxy-mode
+  (:p "Renamed to " (:nxref :class-name 'nyxt/mode/proxy) "."
+      " Query replace the regexp "
+      (:code "nyxt/\([a-z-]*\)-mode") " with " (:code "nyxt/mode/\\1") ".")
+
+  nyxt/reading-line-mode
+  (:p "Renamed to " (:nxref :class-name 'nyxt/mode/reading-line) "."
+      " Query replace the regexp "
+      (:code "nyxt/\([a-z-]*\)-mode") " with " (:code "nyxt/mode/\\1") ".")
+
+  nyxt/record-input-field-mode
+  (:p "Renamed to " (:code 'nyxt/mode/record-input-field) "."
+      " Query replace the regexp "
+      (:code "nyxt/\([a-z-]*\)-mode") " with " (:code "nyxt/mode/\\1") ".")
+
+  nyxt/reduce-bandwidth-mode
+  (:p "Renamed to " (:nxref :class-name 'nyxt/mode/reduce-bandwidth) "."
+      " Query replace the regexp "
+      (:code "nyxt/\([a-z-]*\)-mode") " with " (:code "nyxt/mode/\\1") ".")
+
+  nyxt/reduce-tracking-mode
+  (:p "Renamed to " (:nxref :class-name 'nyxt/mode/reduce-tracking) "."
+      " Query replace the regexp "
+      (:code "nyxt/\([a-z-]*\)-mode") " with " (:code "nyxt/mode/\\1") ".")
+
+  nyxt/remembrance-mode
+  (:p "Renamed to " (:code "nyxt/mode/remembrance") "."
+      " Query replace the regexp "
+      (:code "nyxt/\([a-z-]*\)-mode") " with " (:code "nyxt/mode/\\1") ".")
+
+  nyxt/repeat-mode
+  (:p "Renamed to " (:nxref :class-name 'nyxt/mode/repeat) "."
+      " Query replace the regexp "
+      (:code "nyxt/\([a-z-]*\)-mode") " with " (:code "nyxt/mode/\\1") ".")
+
+  nyxt/repl-mode
+  (:p "Renamed to " (:nxref :class-name 'nyxt/mode/repl) "."
+      " Query replace the regexp "
+      (:code "nyxt/\([a-z-]*\)-mode") " with " (:code "nyxt/mode/\\1") ".")
+
+  nyxt/search-buffer-mode
+  (:p "Renamed to " (:nxref :class-name 'nyxt/mode/search-buffer) "."
+      " Query replace the regexp "
+      (:code "nyxt/\([a-z-]*\)-mode") " with " (:code "nyxt/mode/\\1") ".")
+
+  nyxt/small-web-mode
+  (:p "Renamed to " (:nxref :class-name 'nyxt/mode/small-web) "."
+      " Query replace the regexp "
+      (:code "nyxt/\([a-z-]*\)-mode") " with " (:code "nyxt/mode/\\1") ".")
+
+  nyxt/spell-check-mode
+  (:p "Renamed to " (:nxref :class-name 'nyxt/mode/spell-check) "."
+      " Query replace the regexp "
+      (:code "nyxt/\([a-z-]*\)-mode") " with " (:code "nyxt/mode/\\1") ".")
+
+  nyxt/style-mode
+  (:p "Renamed to " (:nxref :class-name 'nyxt/mode/style) "."
+      " Query replace the regexp "
+      (:code "nyxt/\([a-z-]*\)-mode") " with " (:code "nyxt/mode/\\1") ".")
+
+  nyxt/tts-mode
+  (:p "Renamed to " (:code 'nyxt/mode/tts) "."
+      " Query replace the regexp "
+      (:code "nyxt/\([a-z-]*\)-mode") " with " (:code "nyxt/mode/\\1") ".")
+
+  nyxt/user-script-mode
+  (:p "Renamed to " (:nxref :class-name 'nyxt/mode/user-script) "."
+      " Query replace the regexp "
+      (:code "nyxt/\([a-z-]*\)-mode") " with " (:code "nyxt/mode/\\1") ".")
+
+  nyxt/vi-mode
+  (:p "Renamed to " (:nxref :class-name 'nyxt/mode/vi) "."
+      " Query replace the regexp "
+      (:code "nyxt/\([a-z-]*\)-mode") " with " (:code "nyxt/mode/\\1") ".")
+
+  nyxt/visual-mode
+  (:p "Renamed to " (:nxref :class-name 'nyxt/mode/visual) "."
+      " Query replace the regexp "
+      (:code "nyxt/\([a-z-]*\)-mode") " with " (:code "nyxt/mode/\\1") ".")
+
+  nyxt/watch-mode
+  (:p "Renamed to " (:nxref :class-name 'nyxt/mode/watch) "."
+      " Query replace the regexp "
+      (:code "nyxt/\([a-z-]*\)-mode") " with " (:code "nyxt/mode/\\1") "."))

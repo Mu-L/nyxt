@@ -1,15 +1,15 @@
 ;;;; SPDX-FileCopyrightText: Atlas Engineer LLC
 ;;;; SPDX-License-Identifier: BSD-3-Clause
 
-(nyxt:define-package :nyxt/reduce-tracking-mode
-    (:documentation "Mode to mitigate fingerprinting."))
-(in-package :nyxt/reduce-tracking-mode)
+(nyxt:define-package :nyxt/mode/reduce-tracking
+  (:documentation "Package for `reduce-tracking-mode' to mitigate fingerprinting."))
+(in-package :nyxt/mode/reduce-tracking)
 
 (define-mode reduce-tracking-mode ()
-  "Set specific settings in the web view in order to mitigate fingerprinting,
+  "Set specific settings in the web view in order to mitigate fingerprinting
 (how third-party trackers attempt to identify you).
 
-Fingerprinting can be tested with https://panopticlick.eff.org/."
+Fingerprinting can be tested at https://panopticlick.eff.org/."
   ((preferred-languages
     '("en_US")
     :type (list-of string)
@@ -17,8 +17,9 @@ Fingerprinting can be tested with https://panopticlick.eff.org/."
 Accept-Language HTTP header.")
    (preferred-user-agent
     ;; Check https://techblog.willshouse.com/2012/01/03/most-common-user-agents
+    ;; and https://www.whatismybrowser.com/guides/the-latest-user-agent/safari
     ;; occasionally and refresh when necessary.
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.6.1 Safari/605.1.15"
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_1) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Safari/605.1.15"
     :type string
     :documentation "The user agent to set when enabling `reduce-tracking-mode'.
 It's Safari on macOS by default, because this way we break fewer websites while
@@ -58,12 +59,20 @@ still being less noticeable in the crowd.")
 (defun strip-tracking-parameters (request-data)
   (let ((mode (find-submode 'reduce-tracking-mode)))
     (when (and mode (not (uiop:emptyp (quri:uri-query (url request-data)))))
-      (setf (quri:uri-query-params (url request-data))
-            (remove-if (rcurry #'member (query-tracking-parameters mode)
-                                          :test #'string-equal)
-                       (quri:url-decode-params (quri:uri-query (url request-data)) :lenient t)
-                       :key #'first)))
-    request-data))
+      ;; Some symbols like : or / are only percent-encoded when they
+      ;; have a special meaning. It is not uncommon to have a link like
+      ;; https://example.com/foo?query=bar&redirect=https://foobar.com
+      ;; The URL in `redirect` part must not be percent encoded.
+      ;; For this purpose we do not alter percent encoding here.
+      (setf (quri:uri-query-params (url request-data) :percent-encode nil)
+            (remove-if (rcurry #'member
+                               (query-tracking-parameters mode)
+                               :test #'string-equal)
+                       (quri:url-decode-params (quri:uri-query (url request-data))
+                                               :lenient t
+                                               :percent-decode nil)
+                       :key #'first))))
+  request-data)
 
 (defmethod enable ((mode reduce-tracking-mode) &key)
   (setf (old-timezone mode) (uiop:getenv "TZ")
@@ -71,20 +80,14 @@ still being less noticeable in the crowd.")
   (setf (old-user-agent mode) (ffi-buffer-user-agent (buffer mode))
         (ffi-buffer-user-agent (buffer mode)) (preferred-user-agent mode))
   (setf (ffi-preferred-languages (buffer mode)) (preferred-languages mode))
-  (setf (ffi-tracking-prevention (buffer mode)) t)
-  (hooks:add-hook
-   (request-resource-hook (buffer mode))
-   #'strip-tracking-parameters))
+  (hooks:add-hook (request-resource-hook (buffer mode))
+                  #'strip-tracking-parameters))
 
 (defmethod disable ((mode reduce-tracking-mode) &key)
   (when (old-timezone mode)
     (setf (uiop:getenv "TZ") (old-timezone mode)))
   (setf (ffi-buffer-user-agent (buffer mode)) (old-user-agent mode))
   (setf (ffi-preferred-languages (buffer mode))
-        (list (first
-               (str:split
-                "."
-                (or (uiop:getenv "LANG") "")))))
-  (setf (ffi-tracking-prevention (buffer mode)) nil)
+        (list (first (str:split "." (or (uiop:getenv "LANG") "")))))
   (hooks:remove-hook (request-resource-hook (buffer mode))
                      #'strip-tracking-parameters))

@@ -3,9 +3,15 @@
 
 (in-package :nyxt)
 
-(hooks:define-hook-type prompt-buffer (function (prompt-buffer)))
-(hooks:define-hook-type resource (function (request-data) (or request-data null)))
-(hooks:define-hook-type browser (function (browser)))
+(hooks:define-hook-type prompt-buffer (function (prompt-buffer))
+  "Hook acting on `prompt-buffer'.")
+(hooks:define-hook-type resource (function (request-data) (or request-data null))
+  "Hook acting on `request-data' resource.
+Returns:
+- Possibly modified `request-data'---redirect/block request.
+- NIL---block request.")
+(hooks:define-hook-type browser (function (browser))
+  "Hook acting on `browser' (likely `*browser*').")
 (export-always '(hook-resource))
 
 (define-class proxy ()
@@ -23,16 +29,16 @@ Example: \"http://192.168.1.254:8080\".")
     :documentation "Non-nil if downloads should also use the proxy."))
   (:export-class-name-p t)
   (:export-accessor-names-p t)
-  (:accessor-name-transformer (class*:make-name-transformer name))
   (:documentation "Enable forwarding of all network requests to a specific host.
 This can apply to specific buffer."))
 
 (export-always 'combine-composed-hook-until-nil)
 (defmethod combine-composed-hook-until-nil ((hook hooks:hook) &optional arg)
-  "Return the result of the composition of the HOOK handlers on ARG, from
-oldest to youngest.  Stop processing when a handler returns nil.
-Without handler, return ARG.  This is an acceptable `combination' for
-`hook'."
+  "Return the composition of the HOOK handlers on ARG, from oldest to youngest.
+
+Stop processing when a handler returns nil. Without handlers, return ARG.
+
+This is an acceptable `hooks:combination' for `hooks:hook'."
   (labels ((compose-handlers (handlers result)
              (if handlers
                  (let ((new-result (funcall (first handlers) result)))
@@ -45,16 +51,22 @@ Without handler, return ARG.  This is an acceptable `combination' for
 (export-always 'renderer-browser)
 (defclass renderer-browser ()
   ()
-  (:metaclass interface-class))
+  (:metaclass interface-class)
+  (:documentation "Renderer-specific representation for the global browser.
+Should be redefined by the renderer."))
 
 (define-class browser (renderer-browser)
-  ((profile
-    (global-profile)
-    :type nyxt-profile
-    :documentation "Global profile used to specialize the behavior of
-various parts, such as the path of all data files.
-This profile is used when there is no context buffer.
-See also the `profile' slot in the `buffer' class.")
+  ((search-engines
+    (mapcar #'make-instance '(ddg-search-engine
+                              wikipedia-search-engine
+                              atlas-searx-search-engine))
+    :type (cons search-engine *)
+    :documentation "A list of `search-engine' objects.
+The first one is the default, as per `default-search-engine'.")
+   (search-engine-suggestions-p
+    t
+    :type boolean
+    :documentation "Whether search suggestions are displayed.")
    (remote-execution-p
     nil
     :type boolean
@@ -65,8 +77,8 @@ your user profile.")
    (exit-code
     0
     :type alex:non-negative-integer
-    :export nil
-    :accessor nil
+    :reader t
+    :export t
     :documentation "The exit code return to the operating system.
 0 means success.
 Non-zero means failure.")
@@ -76,11 +88,6 @@ Non-zero means failure.")
     :documentation "Thread that listens on socket.
 See `*socket-file*'.
 This slot is mostly meant to clean up the thread if necessary.")
-   (non-terminating-threads
-    '()
-    :type (list-of bt:thread)
-    :documentation "List of threads that don't terminate
-and that ought to be killed when quitting.")
    (messages-content
     '()
     :export t
@@ -99,21 +106,22 @@ Which commands will they invoke next?")
     nil
     :type (maybe function)
     :documentation "The last command invoked by the user.")
+   (command-dispatcher
+    #'dispatch-command
+    :type (or sym:function-symbol function)
+    :documentation "Function to process the command processed in `dispatch-input-event'.
+Takes the function/command as the only argument.")
    (prompt-buffer-generic-history
     (make-ring)
     :documentation "The default history of all prompt buffer entries.
 This history is used if no history is specified for a given prompt buffer.")
-   (default-new-buffer-url (quri:uri (nyxt-url 'new))
-                           :type url-designator
-                           :documentation "The URL set to a new blank buffer opened by Nyxt.")
+   (default-new-buffer-url
+    (quri:uri (nyxt-url 'new))
+    :type url-designator
+    :documentation "The URL set to a new blank buffer opened by Nyxt.")
    (set-url-history
     (make-ring)
-    :documentation "The history of all URLs set via set-url")
-   (old-prompt-buffers
-    '()
-    :export nil
-    :documentation "The list of old prompt buffers.
-This can be used to resume former buffers.")
+    :documentation "A ring that keeps track of all URLs set by `set-url'.")
    (recent-buffers
     (make-ring :size 50)
     :export nil
@@ -150,6 +158,13 @@ issued by Control+<button1> in a new window.")
     (time:now)
     :export nil
     :documentation "`time:timestamp' of when Nyxt was started.")
+   (startup-promise
+    (lpara:promise)
+    :export nil
+    :accessor nil
+    :documentation "Promise used to make `start-browser' synchronous.
+Without it, `start-browser' would return before the `*browser*' is effectively usable.
+Implementation detail.")
    (init-time
     0.0
     :type alex:non-negative-real
@@ -163,12 +178,15 @@ buffers, load data files, open prompt buffer, etc).")
    (native-dialogs
     t
     :type boolean
-    :documentation "Whether to use prompt-buffer-reliant script dialogs and file-chooser.
-If nil, renderer-provided dialogs are used.")
+    :documentation "Whether to replace renderer specific dialog boxes with the
+prompt buffer.")
    (theme
-    (make-instance 'theme:theme)
+    theme:+light-theme+
     :type theme:theme
     :documentation "The theme to use for all the browser interface elements.")
+   (glyph-logo
+    (gethash "nyxt.svg" *static-data*)
+    :documentation "The logo of Nyxt as an SVG.")
    (history-file
     (make-instance 'history-file)
     :type history-file
@@ -181,11 +199,11 @@ See also `history-file' in `context-buffer' for per-buffer history files.")
     :documentation "Whether to restore buffers from the previous session.
 You can store and restore sessions manually to various files with
 `store-history-by-name' and `restore-history-by-name'.")
-   (default-cookie-policy :no-third-party
-                          :type cookie-policy
-                          :documentation "Cookie policy of new buffers.
-Must be one of `:always' (accept all cookies), `:never' (reject all cookies),
-`:no-third-party' (accept cookies for current website only).")
+   (default-cookie-policy
+    :no-third-party
+    :type cookie-policy
+    :documentation "Cookie policy of new buffers.
+Valid values are `:accept', `:never' and `:no-third-party'.")
    ;; Hooks follow:
    (after-init-hook
     (make-instance 'hook-browser)
@@ -252,17 +270,18 @@ The handlers take the `prompt-buffer' as argument.")
     :documentation "Hook run while waiting for the prompt buffer to be available.
 The handlers take the `prompt-buffer' as argument.")
    (external-editor-program
-    (or (uiop:getenv "VISUAL")
-        (uiop:getenv "EDITOR"))
-    :type (or (cons string *) string null)
+    (or (uiop:getenvp "VISUAL")
+        (uiop:getenvp "EDITOR")
+        (when (sera:resolve-executable "gio") "gio open"))
+    :type (or string null)
+    :reader nil
     :writer t
     :export t
-    :documentation "The external editor to use for
-editing files.  You can specify the full command line arguments with a list of
-strings."))
+    :documentation "The external editor to use for editing files.
+The full command, including its arguments, may be specified as list of strings
+or as a single string."))
   (:export-class-name-p t)
   (:export-accessor-names-p t)
-  (:accessor-name-transformer (class*:make-name-transformer name))
   (:documentation "The browser class defines the overall behavior of Nyxt, in
 the sense that it manages the display of buffers.  For instance, it abstracts
 the renderer, and lays the foundations to track and manipulate buffers and
@@ -272,19 +291,22 @@ A typical Nyxt session encompasses a single instance of this class, but nothing
 prevents otherwise.")
   (:metaclass user-class))
 
-(defmethod initialize-instance :after ((browser browser)
-                                       &key (history-file (make-instance 'history-file :profile (profile browser)))
-                                       &allow-other-keys)
-  "Ensure `history-file' uses the browser profile."
-  (setf (history-file browser) history-file))
-
 (defmethod theme ((ignored (eql nil)))
   "Fallback theme in case `*browser*' is NIL."
   (declare (ignore ignored))
-  (make-instance 'theme:theme))
+  theme:+light-theme+)
 
 (defmethod external-editor-program ((browser browser))
-  (alex:ensure-list (slot-value browser 'external-editor-program)))
+  "Specialized reader for `external-editor-program' slot.
+A list of strings is returned, as to comply with `uiop:launch-program' or
+`uiop:run-program'."
+  (with-slots ((cmd external-editor-program)) browser
+    (if (str:blank? cmd)
+        (progn (echo-warning "Invalid value of `external-editor-program' browser slot.") nil)
+        (str:split " " cmd))))
+
+(defmethod default-search-engine ((browser browser))
+  (first (search-engines browser)))
 
 (defmethod get-containing-window-for-buffer ((buffer buffer) (browser browser))
   "Get the window containing a buffer."
@@ -294,13 +316,9 @@ prevents otherwise.")
   "Run BODY from a new thread when renderer is ready.
 `ffi-within-renderer-thread' runs its body on the renderer thread when it's
 idle, so it should do the job."
-  `(ffi-within-renderer-thread
-    browser
-    (lambda ()
-      (run-thread ,thread-name
-        ,@body))))
+  `(ffi-within-renderer-thread (lambda () (run-thread ,thread-name ,@body))))
 
-(defmethod finalize ((browser browser) urls startup-timestamp)
+(defmethod finalize-startup ((browser browser) urls startup-timestamp)
   "Run `after-init-hook' then BROWSER's `startup'."
   ;; `messages-appender' requires `*browser*' to be initialized.
   (unless (find-if (sera:eqs 'messages-appender) (log4cl:all-appenders)
@@ -318,7 +336,6 @@ idle, so it should do the job."
     ;; We only `handler-case' when there is an init file, this way we avoid
     ;; looping indefinitely.
     (let ((restart-on-error? (not (or (getf *options* :no-config)
-                                      (getf *options* :no-init) ; TODO: Deprecated, remove in 4.0.
                                       (not (uiop:file-exists-p (files:expand *config-file*)))))))
       ;; Set `*restart-on-error*' globally instead of let-binding it to
       ;; make it visible from all threads.
@@ -334,13 +351,6 @@ idle, so it should do the job."
   "Startup finalization: Set up initial window.
 This step is crucial to get Nyxt to reach a usable step and be able to handle
 errors correctly from then on."
-  ;; Remove existing windows.  This may happen if we invoked this function,
-  ;; possibly with a different renderer.  To avoid mixing windows with
-  ;; different renderers.  REVIEW: A better option would be to have
-  ;; `update-instance-for-redefined-class' call `customize-instance', but this
-  ;; is tricky to get right, in particular `ffi-buffer-make' seems to hang on
-  ;; `web-buffer's.
-  (mapcar #'window-delete (window-list))
   (window-make browser)
   ;; History restoration and subsequent tasks are error-prone, thus they should
   ;; be done once the browser is ready to handle errors ,that is ,once the
@@ -350,7 +360,7 @@ errors correctly from then on."
 
 (defmethod finalize-first-buffer ((browser browser) urls)
   "Startup finalization: Set up initial buffer."
-  (switch-buffer :buffer (make-buffer :url (quri:uri (nyxt-url 'new)) :no-history-p t))
+  (switch-buffer :buffer (make-buffer :url (quri:uri (nyxt-url 'new))))
   (on-renderer-ready "finalize-history"
     ;; If we've reached here browser should be functional, no need to restart on error.
     (setf *restart-on-error* nil)
@@ -360,7 +370,7 @@ errors correctly from then on."
   "Startup finalization: Restore history, open URLs, display startup errors."
   (macrolet ((with-protected-history (&body body)
                `(with-protect ("Error restoring history ~a: ~a"
-                               (files:expand (history-file *browser*))
+                               (files:expand (history-file browser))
                                :condition)
                   ,@body)))
     (labels ((clear-history-owners ()
@@ -368,18 +378,18 @@ errors correctly from then on."
 After this, buffers from a previous session are permanently lost, they cannot be
 restored."
                (with-protected-history
-                   (files:with-file-content (history (history-file *browser*))
+                   (files:with-file-content (history (history-file browser))
                      (when history
                        (clrhash (htree:owners history)))))))
       ;; Must catch all history-related errors, otherwise subsequent code would
       ;; not be run.
       (handler-case
           (let ((init-buffer (current-buffer)))
-            (if (restore-session-on-startup-p *browser*)
+            (if (restore-session-on-startup-p browser)
                 (if (with-protected-history
                         (restore-history-buffers
-                         (files:content (history-file *browser*))
-                         (history-file *browser*)))
+                         (files:content (history-file browser))
+                         (history-file browser)))
                     (open-urls urls)
                     (open-urls (or urls (list (default-new-buffer-url browser)))))
                 (progn
@@ -390,6 +400,7 @@ restored."
         (error (c)
           ;; TODO: Clear buffers or back up history?
           (log:warn c)))
+      (lpara:fulfill (slot-value browser 'startup-promise))
       (hooks:run-hook (after-startup-hook browser) browser)
       (funcall* (startup-error-reporter-function browser)))))
 
@@ -398,42 +409,22 @@ restored."
   (when (null browser)
     (error "There is no current *browser*. Is Nyxt started?")))
 
-(-> set-window-title (&optional window buffer) *)
+(-> set-window-title (&optional window) *)
 (export-always 'set-window-title)
-(defun set-window-title (&optional (window (current-window)) (buffer (current-buffer)))
-  "Set current window title to the return value of (titler window). "
-  (declare (ignore buffer)) ; TODO: BUFFER is kept for backward compatibility.  Remove with 3.0.
-  (setf (ffi-window-title window) (funcall (titler window) window)))
+(defun set-window-title (&optional (window (current-window)))
+  "Set WINDOW title."
+  (setf (ffi-window-title window) (titler window)))
 
-(-> window-default-title (window) string)
-(export-always 'window-default-title)
-(defun window-default-title (window)
-  "Return a window title in the form 'Nyxt - URL'.
-If Nyxt was started from a REPL, use 'Nyxt REPL - URL' instead.
-This is useful to tell REPL instances from binary ones."
-  (let* ((buffer (active-buffer window))
-         (url (url buffer))
-         (title (title buffer)))
-    (setf title (if (str:emptyp title) "" title))
-    (setf url (if (url-empty-p url) "<no url/name>" (render-url url)))
-    (the (values string &optional)
-         (str:concat "Nyxt" (when *run-from-repl-p* " REPL") " - "
-                     title (unless (str:emptyp title) " - ")
-                     url))))
-
-;; REVIEW: Do we need :NO-FOCUS? It's not used anywhere.
-(-> open-urls ((maybe (cons quri:uri *)) &key (:no-focus boolean)) *)
-(defun open-urls (urls &key no-focus)
-  "Create new buffers from URLs.
-First URL is focused if NO-FOCUS is nil."
+(-> open-urls ((maybe (cons quri:uri *))) *)
+(defun open-urls (urls)
+  "Create new buffers and load URLS.
+The buffer corresponding to the first URL is focused."
   (with-protect ("Could not make buffer to open ~a: ~a" urls :condition)
-    (let ((first-buffer (first (mapcar
-                                (lambda (url) (make-buffer :url url))
-                                urls))))
-      (when (and first-buffer (not no-focus))
+    (let ((first-buffer (first (mapcar (lambda (url) (make-buffer :url url))
+                                       urls))))
+      (when first-buffer
         (if (open-external-link-in-new-window-p *browser*)
-            (let ((window (window-make *browser*)))
-              (window-set-buffer window first-buffer))
+            (ffi-window-set-buffer (window-make *browser*) first-buffer)
             (set-current-buffer first-buffer))))))
 
 (defun get-keymap (buffer buffer-keyscheme-map)
@@ -450,7 +441,9 @@ If none is found, fall back to `keyscheme:cua'."
 (export-always 'renderer-request-data)
 (defclass renderer-request-data ()
   ()
-  (:metaclass interface-class))
+  (:metaclass interface-class)
+  (:documentation "Renderer-specific request object.
+Should be redefined by the renderer."))
 
 (define-class request-data (renderer-request-data)
   ((buffer
@@ -507,7 +500,13 @@ view.")
     :documentation "The key sequence that generated the request."))
   (:export-class-name-p t)
   (:export-accessor-names-p t)
-  (:accessor-name-transformer (class*:make-name-transformer name)))
+  (:documentation "Representation of HTTP(S) request.
+Most important slots are:
+- `buffer' request belongs to.
+- `url' requested.
+- `request-headers'/`response-headers' for headers it's requested with.
+- and `toplevel-p'/`resource-p' for whether it's a new page or resource
+  request (respectively)."))
 
 (export-always 'url-dispatching-handler)
 (-> url-dispatching-handler
@@ -516,17 +515,21 @@ view.")
      (or string (function (quri:uri) (or quri:uri null))))
     *)
 (defun url-dispatching-handler (name test action)
-  "Return a `resource' handler that, if `add-hook'ed to the `request-resource-hook',
-will automatically apply its ACTION on the URLs that conform to TEST.
+  "Return a `hook-request' handler apply its ACTION on the URLs conforming to TEST.
+Fit for `request-resource-hook'.
 
 TEST should be function of one argument, the requested URL.
-ACTION can be either a shell command as a string, or a function taking a URL as argument.
-In case ACTION returns nil (always the case for shell command), URL request is aborted.
-The new URL returned by ACTION is loaded otherwise.
 
-`match-host', `match-scheme', `match-domain' and `match-file-extension'
-can be used to create TEST-functions, but any other function of one argument
-would fit the TEST slot as well.
+ACTION can be either
+- a shell command as a string,
+- or a function taking a URL as argument.
+
+In case ACTION returns nil (always the case for shell command), URL request is
+aborted. If ACTION returns a URL, it's loaded.
+
+`match-host', `match-scheme', `match-domain' and `match-file-extension' can be
+used to create TEST-functions, but any other function of one argument would fit
+the TEST slot as well.
 
 The following example does a few things:
 - Forward DOI links to the doi.org website.
@@ -589,10 +592,10 @@ The following example does a few things:
 (defun javascript-error-handler (condition)
   (echo-warning "JavaScript error: ~a" condition))
 
-(defun print-message (message &optional window)
-  (let ((window (or window (current-window))))
-    (when window
-      (ffi-print-message window message))))
+(defun print-message (html-body &optional (window (current-window)))
+  (with-slots (message-buffer) window
+    (when (and window message-buffer)
+      (ffi-print-message window html-body))))
 
 (export-always 'current-window)
 (defun current-window (&optional no-rescan)
@@ -617,8 +620,9 @@ sometimes yields the wrong result."
 Return BUFFER."
   (unless (eq 'prompt-buffer (sera:class-name-of buffer))
     (if (current-window)
-        (window-set-buffer (current-window) buffer :focus focus)
+        (ffi-window-set-buffer (current-window) buffer :focus focus)
         (make-window buffer))
+    (set-window-title)
     buffer))
 
 (export-always 'current-prompt-buffer)
@@ -629,11 +633,11 @@ Return BUFFER."
 (export-always 'focused-buffer)
 (defun focused-buffer (&optional (window (current-window)) )
   "Return the currently focused buffer."
-  ;; TODO: Add message-buffer when we have the slot in `window'.
   (find-if #'ffi-focused-p
            (list (first (active-prompt-buffers window))
                  (active-buffer window)
-                 (status-buffer window))))
+                 (status-buffer window)
+                 (message-buffer window))))
 
 (define-internal-page-command-global reduce-to-buffer (&key (delete t))
     (reduced-buffer "*Reduced Buffers*")
@@ -645,8 +649,8 @@ set of useful URLs or preparing a list to send to a someone else."
                   :sources (make-instance 'buffer-source
                                           :constructor (remove-if #'internal-url-p (buffer-list)
                                                                   :key #'url)
-                                          :return-actions #'identity
-                                          :multi-selection-p t))))
+                                          :actions-on-return #'identity
+                                          :enable-marks-p t))))
     (unwind-protect
          (spinneret:with-html-string
            (:h1 "Reduced Buffers:")
@@ -667,3 +671,24 @@ set of useful URLs or preparing a list to send to a someone else."
                          (:hr ""))))
                 (:p "None chosen."))))
       (when delete (mapcar #'buffer-delete buffers)))))
+
+(export-always 'render-menu)
+(defun render-menu (mode-symbol &optional (buffer (current-buffer)))
+  "Render a menu for a given mode symbol."
+  (spinneret:with-html
+    (:div :class "mode-menu"
+          (loop for command in (list-mode-commands mode-symbol)
+                collect
+                   (let ((name (string-downcase (closer-mop:generic-function-name command)))
+                         (bindings (keymaps:pretty-binding-keys
+                                    (name command)
+                                    (current-keymaps buffer)
+                                    :print-style (keymaps:name (keyscheme buffer)))))
+                     (:nbutton
+                       :class "button binding"
+                       :text (if bindings (first bindings) ">")
+                       `(nyxt::run-async ,command))
+                     (:nbutton
+                       :class "button command"
+                       :text name
+                       `(nyxt::run-async ,command)))))))

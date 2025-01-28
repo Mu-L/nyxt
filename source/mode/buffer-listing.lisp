@@ -1,24 +1,33 @@
 ;;;; SPDX-FileCopyrightText: Atlas Engineer LLC
 ;;;; SPDX-License-Identifier: BSD-3-Clause
 
-(nyxt:define-package :nyxt/buffer-listing-mode
-    (:documentation "Mode for buffer-listings"))
-(in-package :nyxt/buffer-listing-mode)
+(nyxt:define-package :nyxt/mode/buffer-listing
+  (:documentation "Package for `buffer-listing-mode', mode for buffer listing."))
+(in-package :nyxt/mode/buffer-listing)
 
 (define-mode buffer-listing-mode ()
-  "Mode for buffer-listing."
+  "Mode for buffer-listing.
+Hosts `list-buffers' page."
   ((visible-in-status-p nil))
   (:toggler-command-p nil))
 
+(define-command list-buffers-as-tree ()
+  "List buffers in a tree."
+  (list-buffers))
+
+(define-command list-buffers-as-list ()
+  "List buffers as a list."
+  (list-buffers :linear-view-p t))
+
 (define-internal-page-command-global list-buffers (&key (cluster nil)
                                                   linear-view-p) ; TODO: Document `cluster'.
-    (listing-buffer "*Buffers*" 'nyxt/buffer-listing-mode:buffer-listing-mode)
-  "Show a buffer listing all buffer trees.
-Buffers have relationships.  When a buffer is spawned from another one (e.g. by
-middle-clicking on a link), the new buffer is a child buffer.
-This kind of relationships creates 'trees' of buffers.
+    (listing-buffer "*Buffers*" 'nyxt/mode/buffer-listing:buffer-listing-mode)
+  "Show all buffers and their interrelations.
 
-With LINEAR-VIEW-P, list buffers linearly instead."
+When a buffer is spawned from another one (e.g. by middle-clicking on a link),
+we say that a child buffer originates from a parent one. These kind of
+relationships define a buffer tree.  When LINEAR-VIEW-P is non-nil, buffers are
+shown linearly instead."
   (labels ((cluster-buffers ()
              "Return buffers as hash table, where each value is a cluster (list of documents)."
              (let ((collection (make-instance 'analysis::document-collection)))
@@ -35,23 +44,19 @@ With LINEAR-VIEW-P, list buffers linearly instead."
                (analysis::clusters collection)))
            (buffer-markup (buffer)
              "Present a buffer in HTML."
-             ;; To avoid spurious spaces.
-             ;; See https://github.com/ruricolist/spinneret/issues/37.
              (let ((*print-pretty* nil))
                (spinneret:with-html
-                 (:p (:nbutton
+                 (:p :class "buffer-listing"
+                     (:nbutton
                        :text "✕"
                        :title "Delete buffer"
-                       (nyxt::delete-buffer :buffers buffer)
-                       (reload-buffer listing-buffer))
+                       `(nyxt::delete-buffer :buffers ,buffer)
+                       `(ffi-buffer-reload ,listing-buffer))
                      (:nbutton
-                       :text "→"
+                       :class "buffer-button"
+                       :text (format nil "~a - ~a" (render-url (url buffer)) (title buffer))
                        :title "Switch to buffer"
-                       (nyxt::switch-buffer :buffer buffer) )
-                     (:a :href (render-url (url buffer))
-                         (if (uiop:emptyp (title buffer))
-                             (render-url (url buffer))
-                             (title buffer)))))))
+                       `(nyxt::switch-buffer :buffer ,buffer))))))
            (buffer-tree->html (root-buffer)
              "Present a single buffer tree in HTML."
              (spinneret:with-html
@@ -66,57 +71,21 @@ With LINEAR-VIEW-P, list buffers linearly instead."
                      (loop for document in cluster
                            collect (buffer-markup (analysis::source document)))))))
     (spinneret:with-html-string
+      (render-menu 'nyxt/mode/buffer-listing:buffer-listing-mode listing-buffer)
       (:h1 "Buffers")
-      (:nbutton
-        :text "Tree display"
-        (nyxt/buffer-listing-mode::list-buffers))
-      (:nbutton
-        :text "Linear display"
-        (nyxt/buffer-listing-mode::list-buffers :linear-view-p t))
-      (:br)
+      (:nstyle
+        '(.buffer-listing
+         :display "flex")
+        '(.buffer-button
+          :text-align "left"
+          :flex-grow "1"))
       (:div
        (if cluster
            (loop for cluster-key being the hash-key
-                   using (hash-value cluster) of (cluster-buffers)
+                 using (hash-value cluster) of (cluster-buffers)
                  collect (cluster-markup cluster-key cluster))
            (dolist (buffer (buffer-list))
              (if linear-view-p
                  (buffer-markup buffer)
                  (unless (nyxt::buffer-parent buffer)
                    (buffer-tree->html buffer)))))))))
-
-;; FIXME: It's a terribly confusing panel:
-;; - Update button and buffer names are styled the same and are not visually
-;;   separated.
-;; - Buffer as a button is quite confusing and does not match the idea of a
-;;   switchable-to entity better separate action (switch, delete) from
-;;   presentation.
-(define-panel-command-global buffers-panel ()
-    (panel-buffer "*Buffers panel*")
-  "Display a list of buffers with easy switching."
-  (flet ((buffer-markup (buffer)
-           "Create the presentation for a buffer."
-           (spinneret:with-html-string
-             (:p (:nbutton :text (title buffer)
-                   :buffer panel-buffer
-                   (nyxt::switch-buffer :buffer buffer))))))
-    (spinneret:with-html-string
-      (:nstyle (lass:compile-and-write
-                '(.button
-                  :white-space nowrap
-                  :overflow-x hidden
-                  :display block
-                  :text-overflow ellipsis)))
-      (:body
-       (:h1 "Buffers")
-       (:nbutton :text "Update ↺"
-         :button panel-buffer
-         (reload-buffer
-          (find
-           (render-url (url panel-buffer))
-           (nyxt::panel-buffers (current-window))
-           :test #'string=
-           :key (compose
-                 #'render-url #'url))))
-       (loop for buffer in (buffer-list)
-             collect (:raw (buffer-markup buffer)))))))

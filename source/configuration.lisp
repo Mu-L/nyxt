@@ -6,7 +6,7 @@
 (define-class config-directory-file (files:config-file nyxt-file)
   ((files:base-path #p""))
   (:export-class-name-p t)
-  (:accessor-name-transformer (class*:make-name-transformer name)))
+  (:documentation "Nyxt directory for config files."))
 
 (define-class config-special-file (config-directory-file)
   ((files:base-path #p"")
@@ -14,16 +14,21 @@
                         :accessor nil
                         :type keyword))
   (:export-class-name-p t)
-  (:accessor-name-transformer (class*:make-name-transformer name))
   (:documentation "Like `config-directory-file' but can be controlled from command line options."))
 
-(define-class config-file (config-special-file files:virtual-file nyxt-lisp-file)
+(define-class config-file (config-special-file nyxt-lisp-file)
   ((files:base-path #p"config")
    (command-line-option :config
                         :accessor nil
                         :type keyword))
   (:export-class-name-p t)
-  (:accessor-name-transformer (class*:make-name-transformer name)))
+  (:documentation "Lisp configuration file which path can be controlled from command line options.
+Unlike `auto-config-file', it can only be loaded with `cl:load', it is not meant to be read with
+`nfiles:read-file' or `nfiles:content'."))
+
+(defmethod files:read-file ((profile nyxt-profile) (file config-file) &key)
+  "Don't load anything for `config-file's since they are Lisp file to be loaded with `cl:load'."
+  nil)
 
 (define-class auto-config-file (config-special-file nyxt-lisp-file)
   ((files:base-path (files:join #p"auto-config." (princ-to-string (version))))
@@ -31,7 +36,9 @@
                         :accessor nil
                         :type keyword))
   (:export-class-name-p t)
-  (:accessor-name-transformer (class*:make-name-transformer name)))
+  (:documentation "Lisp configuration file which path can be controlled from command line options.
+Unlike `config-file', it can both loaded with `cl:load' and read with
+`nfiles:read-file'.  The latter should return a structured reification of the configuration."))
 
 (defmethod files:resolve ((profile nyxt-profile) (config-file config-special-file))
   (let* ((option (slot-value config-file 'command-line-option))
@@ -46,23 +53,6 @@
               (log:warn "File ~s does not exist." path))
             path)))))
 
-(defparameter %report-existing-nyxt-2-config
-  (sera:once
-   (lambda (path)
-     (when (not (uiop:file-exists-p path))
-       (let ((nyxt-2-path (files:expand (make-instance 'config-file
-                                                       :base-path #p"init"))))
-         (when (uiop:file-exists-p nyxt-2-path)
-           (log:warn "Found ~a, possibly a Nyxt 2 configuration.
-Consider porting your configuration to ~a."
-                     nyxt-2-path path))))
-     nil)))
-
-(defmethod files:resolve ((profile nyxt-profile) (config-file config-file))
-  (let ((path (call-next-method)))
-    (funcall %report-existing-nyxt-2-config path)
-    path))
-
 (export-always '*auto-config-file*)
 (defvar *auto-config-file* (make-instance 'auto-config-file)
   "The generated configuration file.")
@@ -75,7 +65,7 @@ Consider porting your configuration to ~a."
   ((files:base-path #p"nyxt.log")
    (files:name "log-file"))
   (:export-class-name-p t)
-  (:accessor-name-transformer (class*:make-name-transformer name)))
+  (:documentation "Data file for Nyxt logs."))
 
 (export-always '*log-file*)
 (defvar *log-file* (make-instance 'log-file)
@@ -88,13 +78,30 @@ This is global because logging starts before the `*browser*' is even initialized
 (define-class nyxt-source-directory (nyxt-file)
   ((files:name "source"))
   (:export-class-name-p t)
-  (:accessor-name-transformer (class*:make-name-transformer name)))
+  (:documentation "Directory with Nyxt sources."))
 
 (defmethod files:resolve ((profile nyxt-profile) (directory nyxt-source-directory))
+  "Try hard to find Nyxt source on disk.
+Return #p\"\" if not found."
   (let ((asd-path (ignore-errors (asdf:system-source-directory :nyxt))))
     (if (uiop:directory-exists-p asd-path)
         asd-path
-        nasdf:*dest-source-dir*)))
+        (or
+         ;; XDG / FHS:
+         (find-if (lambda (d)
+                    (uiop:file-exists-p (uiop:merge-pathnames* "nyxt.asd" d)))
+                  (uiop:xdg-data-dirs "nyxt"))
+         ;; Location relative to the binary:
+         (let ((relative-dir (uiop:merge-pathnames*
+                              "share/nyxt/"
+                              (files:parent
+                               (files:parent
+                                (uiop:ensure-pathname
+                                 (first (uiop:raw-command-line-arguments)) :truenamize t))))))
+           (when (uiop:file-exists-p (uiop:merge-pathnames* "nyxt.asd" relative-dir))
+             relative-dir))
+         ;; Not found:
+         #p""))))
 
 (export-always '*source-directory*)
 (defvar *source-directory* (make-instance 'nyxt-source-directory)
@@ -106,7 +113,7 @@ This is set globally so that it can be looked up if there is no
   ((files:base-path #p"extensions/")
    (files:name "extensions"))
   (:export-class-name-p t)
-  (:accessor-name-transformer (class*:make-name-transformer name)))
+  (:documentation "Nyxt data subdirectory for Lisp extensions."))
 
 (export-always '*extensions-directory*)
 (defvar *extensions-directory* (make-instance 'extensions-directory)
@@ -116,10 +123,13 @@ This is set globally so that extensions can be loaded even if there is no
 
 (export-always 'nyxt-source-registry)
 (defun nyxt-source-registry ()
-  `(:source-registry
-    (:tree ,(files:expand *extensions-directory*))
-    (:tree ,(files:expand *source-directory*)) ; Probably useless since systems are immutable.
-    :inherit-configuration))
+  "Return Nyxt-specific ASDF registry, with source and extension directories."
+  (let ((source-dir (files:expand *source-directory*)))
+    `(:source-registry
+      (:tree ,(files:expand *extensions-directory*))
+      ,@(unless (uiop:absolute-pathname-p source-dir)
+          `((:tree ,source-dir))) ; Probably useless since systems are immutable.
+      :inherit-configuration)))
 
 (defun set-nyxt-source-location (pathname) ; From `sb-ext:set-sbcl-source-location'.
   "Initialize the NYXT logical host based on PATHNAME, which should be the
@@ -146,20 +156,24 @@ translations are preserved."
               ,@current-translations)))))
 
 (define-class slot-form ()
-  ((name nil
-         :type symbol)
-   (value nil
-          :type t))
+  ((name
+    nil
+    :type symbol)
+   (value
+    nil
+    :type t))
   (:export-class-name-p t)
-  (:accessor-name-transformer (class*:make-name-transformer name)))
+  (:documentation "A form to set slot with `name' to `value'."))
 
 (define-class class-form ()
-  ((class-name nil
-               :type symbol)
-   (forms '()
-          :type (maybe (cons (or cons slot-form) *))))
+  ((class-name
+    nil
+    :type symbol)
+   (forms
+    '()
+    :type (maybe (cons (or cons slot-form) *))))
   (:export-class-name-p t)
-  (:accessor-name-transformer (class*:make-name-transformer name)))
+  (:documentation "A set of `forms' for class configuration."))
 
 (defun read-init-form-slot (class-name sexp)
   "Return 2 values:
@@ -182,9 +196,9 @@ Return NIL if not a slot setting."
 - the class name
 - the list of forms, either `slot-form' or a raw s-exp.
 Return NIL if not a class form."
-  (alex:when-let ((class-name (when (and (eq (first form) 'defmethod)
-                                         (eq (second form) 'customize-instance))
-                                (second (first (find-if #'consp form))))))
+  (when-let ((class-name (when (and (eq (first form) 'defmethod)
+                                    (eq (second form) 'customize-instance))
+                           (second (first (find-if #'consp form))))))
     (let ((body (alex:parse-body (sera:nlet lp ((sexp form))
                                    (if (consp (first sexp))
                                        (rest sexp)
@@ -223,13 +237,15 @@ Return NIL if not a class form."
             (uiop:slurp-stream-forms raw-content))))
 
 (defmethod files:serialize ((profile nyxt-profile) (file auto-config-file) stream &key)
-  (dolist (form (files:content file))
-    (write
-     (if (class-form-p form)
-         (write-init-form-class form)
-         form)
-     :stream stream)
-    (fresh-line stream)))
+  (loop for form in (files:content file)
+        for i from 0
+        do (when (> i 0) (terpri stream))
+           (write
+            (if (class-form-p form)
+                (write-init-form-class form)
+                form)
+            :stream stream)
+           (fresh-line stream)))
 
 (defmethod files:write-file ((profile nyxt-profile) (file auto-config-file) &key &allow-other-keys)
   (let ((*print-case* :downcase)
@@ -237,7 +253,7 @@ Return NIL if not a class form."
     (log:info "Writing auto configuration to ~s." (files:expand file))
     (call-next-method)))
 
-(defun auto-configure (&key form class-name slot (slot-value nil slot-value-p))
+(defun auto-configure (&key form class-name slot (slot-value nil slot-value-supplied-p))
   (files:with-file-content (config *auto-config-file*)
     (if class-name
         (flet ((ensure-class-form (class-name)
@@ -253,7 +269,7 @@ Return NIL if not a class form."
                  (delete-if (sera:eqs slot) (sera:filter #'slot-form-p (forms class-form)) :key #'name)))
           (let ((class-form (ensure-class-form class-name)))
             (if slot
-                (if slot-value-p
+                (if slot-value-supplied-p
                     (sera:lret ((slot-form (ensure-slot-form class-form slot)))
                       (setf (value slot-form) slot-value))
                     (setf (forms class-form) (delete-slot-form class-form slot)))
@@ -272,37 +288,28 @@ Return NIL if not a class form."
 (export-always 'define-configuration)
 (defmacro define-configuration (classes &body slots-and-values)
   "Helper macro to customize the class slots of the CLASSES.
-CLASSES is either a symbol or a list of symbols.
 
-Classes can be modes or a one of the user-configurable classes like `browser',
-`buffer', `prompt-buffer', `window'.
+CLASSES is either a symbol or a list of symbols.  Only user-configurable classes
+are valid, such as `browser', `buffer', `prompt-buffer', `window' or modes such
+as `nyxt/mode/hint:hint-mode'.
 
 SLOTS-AND-VALUES is a list of slot re-definitions, optionally preceded by a
-docstring. The `%slot-default%' variable is replaced by the slot initform, the
-`%slot-value%' is replaced by the current value of the slot.
+docstring. The `%slot-default%' variable is replaced by the slot's initform,
+while `%slot-value%' is replaced by the slot's current value .
 
-Example that sets some defaults for all buffers:
+Example:
 
-\(define-configuration (buffer web-buffer)
-  \"Increase the height of the status buffer (mode line) and use VI keybindings.\"
-  ((status-buffer-height (* 2 %slot-value%)
-                         :doc \"Use this is status buffer is too small.\")
-   (default-modes (append '(vi-normal-mode) %slot-default%)
-                  :documentation \"You can use %SLOT-VALUE% instead.
-This will make your config more composable.\")))
-
-In the above, `%slot-default%' will be substituted with the return value of
-`default-modes', and `%slot-value%' will be substituted with the value of
-`status-buffer-height' at the moment of configuration code running.
+\(define-configuration web-buffer
+  ((default-modes (pushnew 'nyxt/mode/force-https:force-https-mode %slot-value%))))
 
 Example to get the `blocker-mode' command to use a new default hostlists:
 
-\(define-configuration nyxt/blocker-mode:blocker-mode
-  ((nyxt/blocker-mode:hostlists (append (list *my-blocked-hosts*) %slot-default%)
+\(define-configuration nyxt/mode/blocker:blocker-mode
+  ((nyxt/mode/blocker:hostlists (append (list *my-blocked-hosts*) %slot-default%)
                                 :doc \"You have to define *my-blocked-hosts* first.\")))
 
 To discover the default value of a slot or all slots of a class, use the
-`describe-slot' or `describe-class' commands respectively."
+`describe-slot' or `describe-class' commands, respectively."
   (alex:with-gensyms (handler hook)
     `(progn
        ,@(loop
@@ -325,7 +332,7 @@ To discover the default value of a slot or all slots of a class, use the
                                          :key #'symbol-name :test #'equal)
                         ;; TODO: Shall we really make the name unique?  Since we
                         ;; are configuring slots, maybe not.
-                        for handler-name = (gensym (format nil "CONFIGURE-~a" slot))
+                        for handler-name = (gensym (format nil "CONFIGURE-~a-~a" class slot))
                         when slot
                           collect
                         `(let ((,hook (slot-value (find-class (quote ,class)) 'nyxt::customize-hook))
@@ -350,7 +357,7 @@ To discover the default value of a slot or all slots of a class, use the
                                                         (declare (ignorable %slot-value% %slot-default%))
                                                         ,value)))
                                           :name (quote ,handler-name))))
-                           (hooks:add-hook ,hook ,handler))
+                           (hooks:add-hook ,hook ,handler :append t))
                         else
                           do (log:warn "Not found slot ~a in class ~a, generating the wrapper method for configuration."
                                        slot-name class)
@@ -367,16 +374,11 @@ To discover the default value of a slot or all slots of a class, use the
 (defun current-buffer (&optional window)
   "Get the active buffer for WINDOW, or the active window otherwise."
   (or %buffer
-      (alex:if-let ((w (or window (current-window))))
+      (if-let ((w (or window (current-window))))
         (active-buffer w)
         (when *browser*
           (log:debug "No active window, picking last active buffer.")
           (last-active-buffer)))))
-
-(defmethod initialize-instance :after ((file nyxt-file) &key (profile t profile-p) &allow-other-keys)
-  (declare (ignorable profile))
-  (when (and (not profile-p) (current-buffer))
-    (setf (files:profile file) (profile (current-buffer)))))
 
 (export-always 'with-current-buffer)
 (defmacro with-current-buffer (buffer &body body)
@@ -399,7 +401,7 @@ To discover the default value of a slot or all slots of a class, use the
 ;; - Or simply leaving the interpretation of this clause to the user.
 ;; But maybe that's beyond if-confirm.
 (export-always 'if-confirm)
-(defmacro if-confirm ((prompt &key (yes "yes" explicit-yes-p) (no "no" explicit-no-p))
+(defmacro if-confirm ((prompt &key (yes "yes" yes-supplied-p) (no "no" no-supplied-p))
                       &optional (yes-form t) no-form)
   "Ask the user for confirmation before executing either YES-FORM or NO-FORM.
 YES-FORM is executed on YES answer, NO-FORM -- otherwise (including NO and
@@ -422,9 +424,9 @@ Examples:
                      (prompt1
                       :prompt ,prompt
                       :sources (make-instance 'prompter:yes-no-source
-                                              ,@(when explicit-yes-p
+                                              ,@(when yes-supplied-p
                                                   (list :yes yes))
-                                              ,@(when explicit-no-p
+                                              ,@(when no-supplied-p
                                                   (list :no no)))
                       :hide-suggestion-count-p t)
                    (prompt-buffer-canceled () nil))))
@@ -432,28 +434,13 @@ Examples:
          ,yes-form
          ,no-form)))
 
-(export-always 'reset-asdf-registries)
-(defun reset-asdf-registries ()
-  "Nyxt sets the ASDF registries to its own location.
-Call this function from your initialization file to re-enable the default ASDF registries."
-  (setf asdf:*default-source-registries*
-        '(nyxt-source-registry
-          ;; Default value:
-          asdf/source-registry:environment-source-registry
-          asdf/source-registry:user-source-registry
-          asdf/source-registry:user-source-registry-directory
-          asdf/source-registry:default-user-source-registry
-          asdf/source-registry:system-source-registry
-          asdf/source-registry:system-source-registry-directory
-          asdf/source-registry:default-system-source-registry))
-  (asdf:clear-configuration))
-
 (defun set-as-default-browser (&key (name "nyxt")
                                  (targets
                                   (list (uiop:xdg-config-home "mimeapps.list")
                                         (uiop:xdg-data-home "applications/mimeapps.list"))))
   "Return the modified MIME apps list.
 Return the persisted file as second value."
+  (declare (ignorable name targets))
   #+(and unix (not darwin))
   (let* ((target (or (first (sera:filter #'uiop:file-exists-p targets))
                      (first targets)))

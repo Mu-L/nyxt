@@ -8,95 +8,59 @@
 (in-package :theme/tests)
 
 (defvar *theme* (make-instance 'theme:theme
-                               :dark-p t
-                               :background-color "black"
-                               :on-background-color "white"
-                               :primary-color "yellow"
-                               :on-primary-color "black"
-                               :secondary-color "blue"
-                               :on-secondary-color "black"
-                               :accent-color "magenta"
-                               :on-accent-color "black")
+                               :background-color "white"
+                               :action-color "#37A8E4")
   "Dummy theme for testing.")
 
-(define-test basic-css-substitution ()
-  (assert-string= "a{background-color:black;color:yellow;}"
-                              (let ((lass:*pretty* nil))
-                                (theme:themed-css *theme*
-                                  `(a
-                                    :background-color ,theme:background
-                                    :color ,theme:primary)))))
+(define-test fallback-colors ()
+  (assert-string= "white" (theme:background-color- *theme*))
+  (assert-string= "white" (theme:background-color+ *theme*))
+  (assert-string= "black" (theme:on-background-color *theme*))
+  (assert-false (theme:primary-color+ *theme*))
+  (assert-false (theme:primary-color *theme*))
+  (assert-false (theme:primary-color- *theme*))
+  (assert-false (theme:on-primary-color *theme*)))
 
-(define-test multi-rule/multi-color-substitution ()
-  (assert-string= "a{background-color:black;color:yellow;}body{background-color:yellow;color:white;}h1{color:magenta;}"
-                              (let ((lass:*pretty* nil))
-                                (theme:themed-css *theme*
-                                  `(a
-                                    :background-color ,theme:background
-                                    :color ,theme:primary)
-                                  `(body
-                                    :background-color ,theme:primary
-                                    :color ,theme:on-background)
-                                  `(h1
-                                    :color ,theme:accent)))))
+(define-test css-substitution ()
+  (assert-string= "a{background-color:white;color:black;}h1{color:#37A8E4 !important;}"
+                  (let ((lass:*pretty* nil))
+                    (theme:themed-css *theme*
+                      `(a
+                        :background-color ,theme:background-color
+                        :color ,theme:on-background-color)
+                      `(h1
+                        :color ,theme:action-color "!important")))))
 
-(define-test irregular-args ()
-  (assert-string=  "body{background-color:yellow;color:magenta !important;}"
-                               (let ((lass:*pretty* nil))
-                                 (theme:themed-css *theme*
-                                   `(body
-                                     :background-color ,theme:primary
-                                     :color ,theme:accent "!important")))))
+(defmethod assert-contrast ((theme theme:theme)
+                            &key (min-color+-contrast 8.5)
+                              (min-color-contrast 6.5)
+                              (min-color--contrast 4.5))
+  (macrolet ((assert-contrast-ratio (color1 color2 min-contrast)
+               `(assert-true (>= (theme:contrast-ratio ,color1 ,color2)
+                                 ,min-contrast))))
+    (multiple-value-bind (on-colors regular-colors minus-colors plus-colors)
+        (values-list
+         (theme:filter-palette (list (alexandria:curry #'uiop:string-prefix-p "ON-")
+                                     (alexandria:rcurry #'uiop:string-suffix-p "COLOR")
+                                     (alexandria:rcurry #'uiop:string-suffix-p "COLOR-")
+                                     (alexandria:rcurry #'uiop:string-suffix-p "COLOR+"))
+                               (theme:palette theme)))
+      (loop for on-color in on-colors
+            for regular-color in regular-colors
+            for minus-color in minus-colors
+            for plus-color in plus-colors
+            do (assert-contrast-ratio (funcall regular-color theme)
+                                      (funcall on-color theme)
+                                      min-color-contrast)
+            do (assert-contrast-ratio (funcall plus-color theme)
+                                      (funcall on-color theme)
+                                      min-color+-contrast)
+            do (assert-contrast-ratio (funcall minus-color theme)
+                                      (funcall on-color theme)
+                                      min-color--contrast)))))
 
-(define-test quasi-quoted-form ()
-  (assert-string= "body{color:black;background-color:yellow;}"
-                              (let ((lass:*pretty* nil))
-                                (theme:themed-css *theme*
-                                  `(body
-                                    :color ,(if (theme:dark-p theme:theme)
-                                                theme:background
-                                                theme:on-background)
-                                    :background-color ,theme:primary)))))
+(define-test default-light-theme-contrast ()
+  (assert-contrast theme:+light-theme+))
 
-(defun hex-to-rgb (hex)
-  "Convert HEX to an RGB triple."
-  (declare (string hex))
-  (let ((hex (if (uiop:string-prefix-p "#" hex) (subseq hex 1) hex)))
-    (mapcar (lambda (x) (/ x 255.0))
-            (list (parse-integer (subseq hex 0 2) :radix 16)
-                  (parse-integer (subseq hex 2 4) :radix 16)
-                  (parse-integer (subseq hex 4 6) :radix 16)))))
-
-(defun relative-luminance (hex)
-  "Compute relative luminance of HEX."
-  ;; See https://www.w3.org/TR/WCAG20-TECHS/G18.html
-  (loop for const in '(0.2126 0.7152 0.0722)
-        for rgb-component in (hex-to-rgb hex)
-        sum (* const (if (<= rgb-component 0.03928)
-                         (/ rgb-component 12.92)
-                         (expt (/ (+ rgb-component 0.055) 1.055) 2.4)))))
-
-(defun contrast-ratio (hex1 hex2)
-  "Compute contrast ratio between HEX1 and HEX2."
-  (let ((ratio (/ (+ (relative-luminance hex1) 0.05)
-                  (+ (relative-luminance hex2) 0.05))))
-    (max ratio (/ ratio))))
-
-(defvar *minimum-contrast-ratio* 7.0
-  "The minimum contrast ratio required between color and on-color.")
-
-(define-test contrast-ratio-between-color-and-on-color ()
-  (flet ((assert-contrast-ratio (hex)
-           (assert-true
-            ;; This avoids handling the fact that on-colors are set as color
-            ;; strings (i.e. "black" and "white")
-            (or (> (contrast-ratio hex "ffffff") *minimum-contrast-ratio*)
-                (> (contrast-ratio hex "000000") *minimum-contrast-ratio*)))))
-    ;; No need to test the ratio between background and on-background since it's
-    ;; trivially close to the largest possible value of 21:1.
-    (assert-contrast-ratio (theme:primary-color theme:+light-theme+))
-    (assert-contrast-ratio (theme:secondary-color theme:+light-theme+))
-    (assert-contrast-ratio (theme:accent-color theme:+light-theme+))
-    (assert-contrast-ratio (theme:primary-color theme:+dark-theme+))
-    (assert-contrast-ratio (theme:secondary-color theme:+dark-theme+))
-    (assert-contrast-ratio (theme:accent-color theme:+dark-theme+))))
+(define-test default-dark-theme-contrast ()
+  (assert-contrast theme:+dark-theme+))

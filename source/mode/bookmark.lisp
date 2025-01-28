@@ -1,9 +1,13 @@
 ;;;; SPDX-FileCopyrightText: Atlas Engineer LLC
 ;;;; SPDX-License-Identifier: BSD-3-Clause
 
-(nyxt:define-package :nyxt/bookmark-mode
-    (:documentation "Manage bookmarks."))
-(in-package :nyxt/bookmark-mode)
+(nyxt:define-package :nyxt/mode/bookmark
+  (:documentation "Package for `bookmark-mode', mode to manage bookmarks.
+The main object is `bookmark-entry'. The main function to add a bookmark is
+`bookmark-add'.
+
+See the `bookmark-mode' for the external user-facing APIs."))
+(in-package :nyxt/mode/bookmark)
 
 ;;; We don't use CL-prevalence to serialize / deserialize bookmarks for a couple for reasons:
 ;;; - It's too verbose, e.g. a list is
@@ -20,7 +24,10 @@
 (export-always 'bookmark-mode)
 (define-mode bookmark-mode ()
   "Manage bookmarks.
-Bookmarks can be persisted to disk, see the `bookmarks-file' mode slot."
+Bookmarks can be persisted to disk, see the `bookmarks-file' mode slot.
+
+See `nyxt/mode/bookmark' package documentation for implementation details and
+internal programming APIs."
   ((visible-in-status-p nil)
    (bookmarks-file
     (make-instance 'bookmarks-file)
@@ -57,18 +64,21 @@ Bookmarks can be persisted to disk, see the `bookmarks-file' mode slot."
        "m u" 'bookmark-url
        "m d" 'delete-bookmark)))
    (style (theme:themed-css (theme *browser*)
-            `("dl"
+            '("dl"
               :margin-left "8px")
             ;; Taken from buffer.lisp to save space for big bookmark lists.
             `(button
-              :background-color ,theme:secondary
-              :color ,theme:on-secondary
+              :background-color ,theme:secondary-color
+              :color ,theme:on-secondary-color
               :display "inline-block"
               :text-decoration "none"
               :border-radius "2px"
               :padding "6px"
               :margin-left "2px"
               :margin-right "2px")))))
+
+(define-configuration context-buffer
+  ((default-modes (cons 'bookmark-mode %slot-value%))))
 
 (defmethod bookmarks-file ((buffer buffer))
   (bookmarks-file (find-submode 'bookmark-mode buffer)))
@@ -87,8 +97,7 @@ Bookmarks can be persisted to disk, see the `bookmarks-file' mode slot."
 (define-class bookmarks-file (files:data-file nyxt-lisp-file)
   ((files:base-path #p"bookmarks")
    (files:name "bookmarks"))
-  (:export-class-name-p t)
-  (:accessor-name-transformer (class*:make-name-transformer name)))
+  (:export-class-name-p t))
 
 (define-class bookmark-entry ()
   ((url (quri:uri ""))
@@ -100,14 +109,19 @@ Bookmarks can be persisted to disk, see the `bookmarks-file' mode slot."
     :type (list-of string)))
   (:export-class-name-p t)
   (:export-accessor-names-p t)
-  (:accessor-name-transformer (class*:make-name-transformer name)))
+  (:documentation "Represents Nyxt bookmark.
+`url' is the identity of the `bookmark-entry', used in `equals'.
+`title', `annotation', `date', `tags' are useful pieces of metadata."))
 
 (defmethod prompter:object-attributes ((entry bookmark-entry) (source prompter:source))
   (declare (ignore source))
-  `(("URL" ,(render-url (url entry)))
-    ("Title" ,(title entry))
-    ("Tags" ,(format nil "~{~a ~}" (tags entry)))
-    ("Date" ,(date entry))))
+  `(("Title" ,(title entry) (:width 3))
+    ("URL" ,(render-url (url entry)) (:width 2))
+    ("Tags" ,(format nil "~{~a ~}" (tags entry)) (:width 1))
+    ("Date" ,(local-time:format-timestring nil
+                                           (date entry)
+                                           :format local-time:+asctime-format+)
+            (:width 1))))
 
 (export-always 'equals)
 (defmethod equals ((e1 bookmark-entry) (e2 bookmark-entry))
@@ -120,6 +134,10 @@ In particular, we ignore the protocol (e.g. HTTP or HTTPS does not matter)."
     t)
 (export-always 'bookmark-add)
 (defun bookmark-add (url &key date title tags)
+  "Store the bookmark for URL in `bookmarks-file' of the current buffer.
+Creates a `bookmark-entry' with DATE, TITLE, and TAGS, when provided.
+If there's a bookmarks with the same URL, update the TITLE, TAGS, and DATE
+instead."
   (files:with-file-content (bookmarks (bookmarks-file (current-buffer)))
     (unless (or (url-empty-p url)
                 (string= "about:blank" (render-url url)))
@@ -144,23 +162,26 @@ In particular, we ignore the protocol (e.g. HTTP or HTTPS does not matter)."
 (define-class bookmark-source (prompter:source)
   ((prompter:name "Bookmarks")
    (prompter:constructor (files:content (bookmarks-file (current-buffer))))
-   (prompter:multi-selection-p t)
-   (prompter:active-attributes-keys '("URL" "Title" "Tags")))
-  (:export-class-name-p t))
+   (prompter:enable-marks-p t)
+   (prompter:active-attributes-keys
+    '("URL" "Title" "Tags")
+    :accessor nil))
+  (:export-class-name-p t)
+  (:documentation "Source for bookmark search.
+By default, matches URL, title, and tags of the bookmark, but can also match
+against date, given `prompter:active-attributes-keys' configuration."))
 
-(defmethod url-sources ((mode bookmark-mode) return-actions)
-  (make-instance 'bookmark-source :return-actions return-actions))
+(defmethod url-sources ((mode bookmark-mode) actions-on-return)
+  (make-instance 'bookmark-source :actions-on-return actions-on-return))
 
 (defun tag-suggestions ()
   (let ((bookmarks (files:content (bookmarks-file (current-buffer)))))
     ;; Warning: `sort' is destructive and `append' does not copy the last list,
     ;; so if we used `delete-duplicates' here it would have modified the last
     ;; list.
-    (let ((tags (sort (remove-duplicates
-                       (mappend #'tags bookmarks)
-                       :test #'string-equal)
-                      #'string-lessp)))
-      tags)))
+    (sort (remove-duplicates (mappend #'tags bookmarks)
+                             :test #'string-equal)
+          #'string-lessp)))
 
 (define-class tag-source (prompter:source)
   ((prompter:name "Tags")
@@ -173,43 +194,18 @@ In particular, we ignore the protocol (e.g. HTTP or HTTPS does not matter)."
    (prompter:filter
     (lambda (suggestion source input)
       (prompter:fuzzy-match suggestion source (last-word input))))
-   (prompter:multi-selection-p t)
-   (prompter:constructor (tag-suggestions)))
-  (:accessor-name-transformer (class*:make-name-transformer name)))
-
-(define-panel-command-global bookmarks-panel ()
-    (panel-buffer "*Bookmarks panel*")
-  "Shows all the bookmarks in a compact panel-buffer layout."
-  (spinneret:with-html-string
-    (:nstyle (lass:compile-and-write
-              '(p
-                :font-size "12px"
-                :margin 0
-                :white-space nowrap
-                :overflow-x nidden
-                :text-overflow ellipsis)
-              '(div
-                :padding-bottom "10px")))
-    (:body
-     (:h1 "Bookmarks")
-     (or (let ((bookmarks (files:content (bookmarks-file (current-buffer)))))
-           (loop for bookmark in bookmarks
-                 collect
-                 (let ((url-href (render-url (url bookmark))))
-                   (:div
-                    (:p (title bookmark))
-                    (:p (:a :href url-href url-href))))))
-         (format nil "No bookmarks in ~s." (files:expand (files:content (bookmarks-file (current-buffer)))))))))
+   (prompter:enable-marks-p t)
+   (prompter:constructor (tag-suggestions))))
 
 (export-always 'url-bookmark-tags)
 (defun url-bookmark-tags (url)
   "Return the list of tags of the bookmark corresponding to URL."
   (let ((bookmarks (files:content (bookmarks-file (current-buffer)))))
-    (alex:when-let ((existing (find url bookmarks :key #'url :test #'url-equal)))
+    (when-let ((existing (find url bookmarks :key #'url :test #'url-equal)))
       (tags existing))))
 
 (define-command bookmark-current-url (&optional (buffer (current-buffer)))
-  "Bookmark the URL of BUFFER."
+  "Bookmark the URL of the current BUFFER."
   (if (url-empty-p (url buffer))
       (echo "Buffer has no URL.")
       (let ((tags (prompt
@@ -224,7 +220,7 @@ In particular, we ignore the protocol (e.g. HTTP or HTTPS does not matter)."
                                               (declare (ignore source input))
                                               (or suggestions
                                                   (list "")))
-                                            :multi-selection-p t)
+                                            :enable-marks-p t)
                              (make-instance 'keyword-source
                                             :buffer buffer)
                              (make-instance 'tag-source
@@ -235,18 +231,25 @@ In particular, we ignore the protocol (e.g. HTTP or HTTPS does not matter)."
         (echo "Bookmarked ~a." (render-url (url buffer))))))
 
 (define-command bookmark-buffer-url ()
-  "Bookmark the currently opened page(s) in the active buffer."
+  "Bookmark the page(s) currently opened in the existing buffers."
   (prompt
    :prompt "Bookmark URL from buffer(s)"
    :sources (make-instance 'buffer-source
-                           :multi-selection-p t
-                           :return-actions (lambda-mapped-command bookmark-current-url))))
+                           :enable-marks-p t
+                           :actions-on-return (lambda-mapped-command bookmark-current-url))))
 
 (define-command bookmark-url
-    (&key (url (ignore-errors (quri:uri (prompt1
-                                         :prompt "Bookmark URL"
-                                         :sources (make-instance 'prompter:raw-source
-                                                                 :name "New URL"))))))
+    (&key (url (prompt1
+                :prompt "Bookmark URL"
+                :sources (list
+                          (make-instance 'url-or-query-source
+                                         :actions-on-return (lambda-mapped-command url))
+                          (make-instance 'buffer-source
+                                         :actions-on-return (lambda-mapped-command url))
+                          (make-instance 'global-history-source
+                                         :actions-on-return (lambda-mapped-command url))
+                          (make-instance 'bookmark-source
+                                         :actions-on-return (lambda-mapped-command url))))))
   "Prompt for a URL to bookmark."
   (if (not (valid-url-p url))
       (echo "Invalid URL '~a'" url)
@@ -257,14 +260,14 @@ In particular, we ignore the protocol (e.g. HTTP or HTTPS does not matter)."
                     :sources (list
                               (make-instance 'prompter:word-source
                                              :name "New tags"
-                                             :multi-selection-p t)
+                                             :enable-marks-p t)
                               (make-instance 'tag-source
                                              :marks (url-bookmark-tags url))))))
         (bookmark-add url :tags tags :title title))))
 
 (define-command delete-bookmark (&optional urls-or-bookmark-entries)
-  "Delete bookmark(s) matching URLS-OR-BOOKMARK-ENTRIES.
-URLS is either a list or a single element."
+  "Delete bookmark(s) matching the chosen URLS-OR-BOOKMARK-ENTRIES.
+URLS-OR-BOOKMARK-ENTRIES could be a list or a single URL/`bookmark-entry'."
   (if urls-or-bookmark-entries
       (files:with-file-content (bookmarks (bookmarks-file (current-buffer)))
         (setf bookmarks
@@ -279,64 +282,68 @@ URLS is either a list or a single element."
       (let ((entries (prompt
                       :prompt "Delete bookmark(s)"
                       :sources (make-instance 'bookmark-source
-                                              :multi-selection-p t))))
+                                              :enable-marks-p t))))
         (delete-bookmark entries))))
 
-(define-command set-url-from-bookmark
-    (&key (return-actions (list (lambda-command buffer-load* (suggestion-values)
-                           "Load first selected bookmark in current buffer and the rest in new buffer(s)."
-                           (mapc (lambda (url) (make-buffer :url (url url))) (rest suggestion-values))
-                           (buffer-load (url (first suggestion-values))))
-                         (lambda-command new-buffer-load (suggestion-values)
-                           "Load bookmark(s) in new buffer(s)."
-                           (mapc (lambda (url) (make-buffer :url (url url))) (rest suggestion-values))
-                           (make-buffer-focus :url (url (first suggestion-values))))
-                         (lambda-command copy-url* (suggestions)
-                           "Copy bookmark URL."
-                           (trivial-clipboard:text (render-url (url (first suggestions)))))
-                         'delete-bookmark)))
+(define-command set-url-from-bookmark ()
   "Set the URL for the current buffer from a bookmark.
-With multiple selections, open the first bookmark in the current buffer, the
-rest in background buffers."
+With marks, open the first bookmark in the current buffer, and the rest in other
+buffers in the background."
   (prompt
    :prompt "Open bookmark(s)"
-   :sources (make-instance 'bookmark-source
-                           :return-actions return-actions)))
+   :sources (make-instance
+             'bookmark-source
+             :actions-on-return
+             (list #'buffer-load*
+                   (lambda-command new-buffer-load (suggestion-values)
+                     "Load bookmark(s) in new buffer(s)."
+                     (mapc (lambda (url) (make-buffer :url (url url))) (rest suggestion-values))
+                     (make-buffer-focus :url (url (first suggestion-values))))
+                   (lambda-command copy-url* (suggestions)
+                     "Copy bookmark URL."
+                     (trivial-clipboard:text (render-url (url (first suggestions)))))
+                   'delete-bookmark))))
 
 (export-always 'list-bookmarks)
 (define-internal-page-command-global list-bookmarks ()
     (bookmarks-buffer "*Bookmarks*")
-  "List all bookmarks in a new buffer."
+  "List all bookmarks in a new buffer.
+Splits bookmarks into groups by tags."
   (let ((bookmarks (group-bookmarks bookmarks-buffer)))
     (spinneret:with-html-string
       (:nstyle (style (find-submode 'bookmark-mode (current-buffer)))) ; TODO: Make sure this is the right buffer
+      (render-menu 'bookmark-mode bookmarks-buffer)
       (:h1 "Bookmarks")
       (cond
         ((zerop (hash-table-count bookmarks))
          (:p (format nil "No bookmarks in ~s." (files:expand (bookmarks-file bookmarks-buffer)))))
         (t (maphash
             (lambda (tag bookmarks)
-              (:nsection :title (or tag "Unsorted")
-               (dolist (bookmark bookmarks)
-                 (let ((uri-host (quri:uri-host (url bookmark)))
-                       (url-href (render-url (url bookmark))))
-                   (:div :class "bookmark-entry"
-                         (:dl
-                          (:dt
-                           (:button :onclick
-                                    (ps:ps
-                                      (let ((section (ps:chain document active-element
-                                                               (closest ".bookmark-entry"))))
-                                        (ps:chain section parent-node (remove-child section)))
-                                      (nyxt/ps:lisp-eval
-                                       (:title "delbkm")
-                                       (nyxt/bookmark-mode:delete-bookmark url-href)))
-                                    "✕")
-                           (serapeum:ellipsize (title bookmark) 80))
-                          (:dd (:a :href url-href uri-host))
-                          (when (tags bookmark)
-                            (:dd (format nil " (~{~a~^, ~})" (tags bookmark)))))
-                         (:hr))))))
+              (:nsection
+                :title (or tag "Unsorted")
+                :id (or tag "unsorted")
+                :open-p nil
+                (dolist (bookmark bookmarks)
+                  (let ((url (render-url (url bookmark)))
+                        (title (title bookmark))
+                        (tags  (tags bookmark)))
+                    (:div
+                     :class "bookmark-entry"
+                     (:dl
+                      (:dt
+                       (:button
+                        :onclick
+                        (ps:ps
+                          (let ((section (ps:chain (nyxt/ps:active-element document)
+                                                   (closest ".bookmark-entry"))))
+                            (ps:chain section parent-node (remove-child section)))
+                          (nyxt/ps:lisp-eval (:title "Delete"
+                                              :buffer bookmarks-buffer)
+                                             (delete-bookmark url)))
+                        "×")
+                       (:a :href url title))
+                      (when tags
+                        (:dd (:pre (format nil "Tags: ~{~a~^, ~}" tags))))))))))
             bookmarks))))))
 
 (defmethod serialize-object ((entry bookmark-entry) stream)
@@ -408,11 +415,11 @@ rest in background buffers."
     (&key (html-file (prompt1
                        ;; TODO: Is there a more intuitive directory for bookmarks?
                        :input (uiop:native-namestring (uiop:getcwd))
-                       :extra-modes 'nyxt/file-manager-mode:file-manager-mode
+                       :extra-modes 'nyxt/mode/file-manager:file-manager-mode
                        :sources (make-instance
-                                 'nyxt/file-manager-mode:file-source
+                                 'nyxt/mode/file-manager:file-source
                                  :extensions '("html")))))
-  "Import bookmarks from an HTML-FILE."
+  "Import bookmarks from an HTML-FILE with bookmarks from other browsers."
   (if (and (uiop:file-exists-p html-file)
            (equal (pathname-type html-file) "html"))
       (with-open-file (in-html html-file :external-format :utf-8)
@@ -433,7 +440,7 @@ rest in background buffers."
 
 (define-command bookmark-hint ()
   "Prompt for element hints and bookmark them."
-  (nyxt/hint-mode:query-hints
+  (nyxt/mode/hint:query-hints
    "Bookmark hint"
    (lambda (result)
      (dolist (url (mapcar #'url result))
@@ -442,8 +449,10 @@ rest in background buffers."
                     :sources (list
                               (make-instance 'prompter:word-source
                                              :name "New tags"
-                                             :multi-selection-p t)
+                                             :enable-marks-p t)
                               (make-instance 'tag-source
-                                             :marks (nyxt/bookmark-mode:url-bookmark-tags url))))))
-         (nyxt/bookmark-mode:bookmark-add url :tags tags :title (fetch-url-title url)))))
+                                             :marks (nyxt/mode/bookmark:url-bookmark-tags url))))))
+         (nyxt/mode/bookmark:bookmark-add url
+                                          :tags tags
+                                          :title (fetch-url-title url)))))
    :selector "a"))

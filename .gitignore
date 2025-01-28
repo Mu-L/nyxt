@@ -1,15 +1,12 @@
 # Ignore build artifacts
-build/
-version
 nyxt
-Nyxt.app
-_build/submodules/system-index.txt
-
-# Ignore PNG and XCF
-*.xcf
-*.png
-# Except for this foler
-!libraries/prompter/*.png
+.flatpak-builder/
+nyxt-flatpak-repository/
+*.flatpak
+build/
+node_modules/
+package.json
+package-lock.json
 
 # Ignore compiled lisp files
 *.FASL
@@ -31,7 +28,11 @@ _build/submodules/system-index.txt
 *.wx64fsl
 *.wx32fsl
 
-# Generated doc
+# Ignore PNG and XCF
+*.xcf
+*.png
+
+# Generated documentation
 manual.html
 
 # Ignore flake lockfile

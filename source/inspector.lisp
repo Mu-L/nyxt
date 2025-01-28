@@ -3,7 +3,9 @@
 
 (in-package :nyxt)
 
-(defvar *inspected-values* (tg:make-weak-hash-table :test 'equal :weakness :value))
+(defvar *inspected-values*
+  (tg:make-weak-hash-table :test 'equal :weakness :value)
+  "All the values Nyxt inspected (with `describe-value', for example).")
 
 (export-always 'sequence-p)
 (defun sequence-p (object)
@@ -18,21 +20,20 @@
 - character,
 - string,
 - non-complex number."
-  (funcall (alex:disjoin
-            'symbolp
-            'characterp
-            'stringp
-            (rcurry 'typep '(and number (not complex))))
-           object))
+  (typep object '(or symbol character string real)))
 
 (export-always 'inspected-value)
 (defmethod inspected-value (id)
+  "Get the inspected value corresponding to ID."
   (gethash id *inspected-values*))
 
 (defmethod (setf inspected-value) (new-value id)
+  "Set the ID-indexed inspected value."
   (setf (gethash id *inspected-values*) new-value))
 
 (defun ensure-inspected-id (value)
+  "In case VALUE was already inspected, return its ID.
+If it wasn't, add it to inspected values and return its new ID."
   (maphash
    (lambda (id object)
      (when (equal value object)
@@ -49,13 +50,16 @@
 Can cause a renderer to choke when set to a high value. Use with caution!")
 
 (defun escaped-literal-print (value)
+  "Print the constant/literal/`scalar-p' VALUE to HTML-escaped string."
   (spinneret:with-html-string
-    (:code (:raw (spinneret::escape-string
+    (:code (:raw (spinneret:escape-string
                   (let ((*print-lines* 2)
                         (*print-length* *inspector-print-length*))
                     (prini-to-string value)))))))
 
 (defun link-to (object)
+  "Convert the OBJECT to a `describe-value' link inspecting it.
+In case it's `scalar-p', simply print it."
   (if (scalar-p object)
       (spinneret:with-html-string
         (:raw (escaped-literal-print object)))
@@ -64,6 +68,7 @@ Can cause a renderer to choke when set to a high value. Use with caution!")
             (:raw (escaped-literal-print object))))))
 
 (defun compact-listing (sequence &key table-p)
+  "Print the SEQUENCE head as table with a link to the rest of the sequence."
   (let ((length (min (length sequence) *inspector-print-length*)))
     (spinneret:with-html-string
       (cond
@@ -73,7 +78,8 @@ Can cause a renderer to choke when set to a high value. Use with caution!")
            (:tr
             (dotimes (i length)
               (:td (:raw (value->html (elt sequence i) t))))
-            (:td "More: " (:raw (link-to sequence)))))))))))
+            (when (> (length sequence) *inspector-print-length*)
+              (:td "More: " (:raw (link-to sequence))))))))))))
 
 (export-always 'value->html)
 (defgeneric value->html (value &optional compact-p)
@@ -121,6 +127,8 @@ values in help buffers, REPL and elsewhere."))
     (:div
      :style "overflow-x: auto"
      (cond
+       ((not (null (cdr (last value))))
+        (:raw (escaped-literal-print value)))
        (compact-p
         (:raw (compact-listing value :table-p t)))
        ((types:association-list-p value)
@@ -157,8 +165,8 @@ values in help buffers, REPL and elsewhere."))
            (loop for val in (rest value) by #'cddr
                  collect (:td (:raw (value->html val t))))))))
        ((and (types:proper-list-p value)
-             (not (alexandria:circular-list-p value))
-             (not (alexandria:circular-tree-p value)))
+             (not (alex:circular-list-p value))
+             (not (alex:circular-tree-p value)))
         (:ul
          (dotimes (i (length value))
            (:li (:raw (value->html (elt value i) t))))))
@@ -238,7 +246,7 @@ values in help buffers, REPL and elsewhere."))
                 ((and (uiop:directory-pathname-p value)
                       (not compact-p))
                  ;; REVIEW: This should use
-                 ;; `nyxt/file-manager-mode:directory-elements' (not accessible
+                 ;; `nyxt/mode/file-manager:directory-elements' (not accessible
                  ;; at the time this is loaded) or an NFiles equivalent (should
                  ;; we abstract most of File Manager to Nfiles?)
                  (dolist (element (append (uiop:subdirectories value)
@@ -268,25 +276,11 @@ values in help buffers, REPL and elsewhere."))
   (if compact-p
       (link-to value)
       (spinneret:with-html-string
-        (alex:if-let ((slot-names (mapcar #'closer-mop:slot-definition-name
-                                          (closer-mop:class-slots (class-of value)))))
+        (if-let ((slot-names (mapcar #'closer-mop:slot-definition-name
+                                     (closer-mop:class-slots (class-of value)))))
           (:dl
            (dolist (slot-name slot-names)
-             (:dt (prini-to-string slot-name)
-                  " "
-                  (:button
-                   :class "button"
-                   :onclick (ps:ps (nyxt/ps:lisp-eval
-                                    (:title "change value")
-                                    (handler-case
-                                        (setf (slot-value value slot-name)
-                                              (first
-                                               (evaluate
-                                                (prompt1
-                                                 :prompt (format nil "Set ~a to" slot-name)
-                                                 :sources 'prompter:raw-source))))
-                                      (prompt-buffer-canceled nil))))
-                   "change "))
+             (:dt (prini-to-string slot-name))
              (:dd (:raw (value->html (slot-value value slot-name) t)))))
           (:raw (escaped-literal-print value))))))
 

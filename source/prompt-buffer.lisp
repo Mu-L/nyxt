@@ -13,137 +13,231 @@
      (height
       :default
       :type (or keyword integer)
+      :writer nil
+      :reader height
+      :export t
       :documentation "The height occupied by the prompt buffer.
 The options are:
-- `:default', which sets it to the value of `prompt-buffer-open-height';
+- `:default', which sets it to a third of the window's height;
 - `:fit-to-prompt', which shrinks the height to fit the input area;
 - an integer, which corresponds to the height in pixels.")
-     (resumable-p t
-                  :type boolean)
-     (prompter:history (prompt-buffer-generic-history *browser*)
-                       ;; No need to export or define the accessor since this is
-                       ;; an override of the prompter slot.
-                       :accessor nil
-                       :export nil
-                       :documentation "By default the prompter library creates a
-new history for each new prompt buffer.  Here we set the history to be shared globally.")
-     ;; TODO: Need a changed-callback?  Probably not, see `search-buffer'.  But
-     ;; can we run the postprocessor without running the filter?
+     (prompter:history
+      (prompt-buffer-generic-history *browser*)
+      ;; Both set to nil since it overrides the default value.
+      :accessor nil
+      :export nil
+      :documentation "Override `prompter:history' to share input history globally.")
      (invisible-input-p
       nil
       :documentation "Whether to replace input by a placeholder character.  This
 is useful to conceal passwords.")
      (hide-suggestion-count-p
       nil
-      :documentation "Whether to show the number of chosen suggestions inside
-brackets.")
+      :documentation "Whether to hide the number of suggestions.
+Affects both the prompt and its sources.")
      (max-suggestions
       0
       :export nil
       :documentation "Maximum number of total suggestions that were listed at
 some point.")
-     ;; TODO: Need max-lines?
-     ;; (max-lines 10
-     ;;               :documentation "Max number of suggestion lines to show.
-     ;; You will want edit this to match the changes done to `style'.")
-     (hide-single-source-header-p
-      nil
-      :documentation "Hide source header when there is only one.")
      (mouse-support-p
       t
       :type boolean
-      :documentation "Whether to allow mouse events to set and return a
-selection over prompt buffer suggestions.")
+      :documentation "Whether to allow mouse events to act on prompt buffer suggestions.
+The following mouse keybindings are available:
+- button1: `run-action-on-return'
+- C-button1: `toggle-mark-forwards'
+- s-button1: `toggle-mark-forwards'
+- M-button1: `set-action-on-return'.")
      (style
       (theme:themed-css (theme *browser*)
-        `(*
-          :font-family "monospace,monospace"
+        #-darwin
+        '(:font-face :font-family "public sans" :font-style "normal" :font-weight "400" :src "url('nyxt-resource:PublicSans-Regular.woff')" "format('woff')")
+        #-darwin
+        '(:font-face :font-family "public sans" :font-style "italic" :font-weight "400" :src "url('nyxt-resource:PublicSans-Italic.woff')" "format('woff')")
+        #-darwin
+        '(:font-face :font-family "public sans" :font-style "normal" :font-weight "100" :src "url('nyxt-resource:PublicSans-Thin.woff')" "format('woff')")
+        #-darwin
+        '(:font-face :font-family "public sans" :font-style "italic" :font-weight "100" :src "url('nyxt-resource:PublicSans-ThinItalic.woff')" "format('woff')")
+        #-darwin
+        '(:font-face :font-family "public sans" :font-style "normal" :font-weight "200" :src "url('nyxt-resource:PublicSans-ExtraLight.woff')" "format('woff')")
+        #-darwin
+        '(:font-face :font-family "public sans" :font-style "italic" :font-weight "200" :src "url('nyxt-resource:PublicSans-ExtraLightItalic.woff')" "format('woff')")
+        #-darwin
+        '(:font-face :font-family "public sans" :font-style "normal" :font-weight "300" :src "url('nyxt-resource:PublicSans-Light.woff')" "format('woff')")
+        #-darwin
+        '(:font-face :font-family "public sans" :font-style "italic" :font-weight "300" :src "url('nyxt-resource:PublicSans-LightItalic.woff')" "format('woff')")
+        #-darwin
+        '(:font-face :font-family "public sans" :font-style "normal" :font-weight "500" :src "url('nyxt-resource:PublicSans-Medium.woff')" "format('woff')")
+        #-darwin
+        '(:font-face :font-family "public sans" :font-style "italic" :font-weight "500" :src "url('nyxt-resource:PublicSans-MediumItalic.woff')" "format('woff')")
+        #-darwin
+        '(:font-face :font-family "public sans" :font-style "normal" :font-weight "600" :src "url('nyxt-resource:PublicSans-SemiBold.woff')" "format('woff')")
+        #-darwin
+        '(:font-face :font-family "public sans" :font-style "italic" :font-weight "600" :src "url('nyxt-resource:PublicSans-SemiBoldItalic.woff')" "format('woff')")
+        #-darwin
+        '(:font-face :font-family "public sans" :font-style "normal" :font-weight "700" :src "url('nyxt-resource:PublicSans-Bold.woff')" "format('woff')")
+        #-darwin
+        '(:font-face :font-family "public sans" :font-style "italic" :font-weight "700" :src "url('nyxt-resource:PublicSans-BoldItalic.woff')" "format('woff')")
+        #-darwin
+        '(:font-face :font-family "public sans" :font-style "normal" :font-weight "800" :src "url('nyxt-resource:PublicSans-ExtraBold.woff')" "format('woff')")
+        #-darwin
+        '(:font-face :font-family "public sans" :font-style "italic" :font-weight "800" :src "url('nyxt-resource:PublicSans-ExtraBoldItalic.woff')" "format('woff')")
+        #-darwin
+        '(:font-face :font-family "public sans" :font-style "normal" :font-weight "900" :src "url('nyxt-resource:PublicSans-Black.woff')" "format('woff')")
+        #-darwin
+        '(:font-face :font-family "public sans" :font-style "italic" :font-weight "900" :src "url('nyxt-resource:PublicSans-BlackItalic.woff')" "format('woff')")
+        #-darwin
+        '(:font-face :font-family "dejavu sans mono" :src "url('nyxt-resource:DejaVuSansMono.ttf')" "format('ttf')")
+        '(*
           :font-size "14px"
           :line-height "18px")
         `(body
-          :overflow "hidden"
-          :margin "0"
-          :padding "0")
-        `("#prompt-area"
-          :background-color ,theme:primary
-          :color ,theme:on-primary
+          :background-color ,theme:background-color-
+          :font-family ,theme:font-family
+          :margin "0")
+        '("#root"
+          :height "100%"
           :display "grid"
-          :grid-template-columns "auto auto 1fr auto"
-          :width "100%")
+          :grid-template-rows "auto 1fr")
+        `("#prompt-area"
+          :margin "4px"
+          :border-radius "3px"
+          :background-color ,theme:primary-color
+          :color ,theme:on-primary-color
+          :border-top "2px solid"
+          :border-bottom "2px solid"
+          :border-color ,theme:primary-color
+          :display "grid"
+          :grid-template-columns "auto auto 1fr auto auto")
         `("#prompt"
+          :background-color ,theme:primary-color
+          :color ,theme:on-primary-color
           :padding-left "10px"
-          :line-height "26px")
+          :line-height "28px")
+        '("#prompt-input"
+          :line-height "28px"
+          :padding-right "10px")
         `("#prompt-extra"
-          :line-height "26px"
-          :padding-right "7px")
+          :font-family ,theme:monospace-font-family
+          :min-width "12px"
+          :background-color ,theme:primary-color
+          :color ,theme:on-primary-color
+          :line-height "28px"
+          :padding-right "5px")
         `("#prompt-modes"
-          :line-height "26px"
+          :line-height "28px"
           :padding-left "3px"
           :padding-right "3px")
-        `("#input"
-          :background-color ,theme:background
-          :color ,theme:on-background
-          :opacity 0.9
+        `("#close-button"
+          :text-align "right"
+          :padding-right "7px"
+          :background-color ,theme:primary-color
+          :min-width "24px"
+          :line-height "28px"
+          :font-weight "bold"
+          :font-size "20px")
+        '(button
+          :background "transparent"
+          :color "inherit"
+          :text-decoration "none"
           :border "none"
+          :padding 0
+          :font "inherit"
+          :outline "inherit")
+        `(.button.action
+          :background-color ,theme:action-color
+          :color ,theme:on-action-color)
+        `((:and .button :hover)
+          :cursor "pointer"
+          :color ,theme:action-color)
+        `(".button:hover svg path"
+          :stroke ,theme:action-color-)
+        `((:and .button (:or :visited :active))
+          :color ,theme:background-color)
+        `(input
+          :font-family ,theme:monospace-font-family)
+        `("#input"
+          :border-radius "4px"
+          :height "28px"
+          :background-color ,theme:background-color
+          :color ,theme:on-background-color
+          :border 2px solid ,theme:secondary-color
           :outline "none"
-          :padding "3px"
           :width "100%"
           :autofocus "true")
-        `(".source"
+        `("#input:focus"
+          :border-color ,(cl-colors-ng:print-hex theme:action-color- :print-alpha 0.40))
+        '(".source"
           :margin-left "10px"
           :margin-top "15px")
-        `(".source-glyph"
-          :margin-right "3px")
         `(".source-name"
-          :background-color ,theme:secondary
-          :color ,theme:on-secondary
-          :padding-left "5px"
-          :line-height "24px")
+          :padding-left "4px"
+          :background-color ,theme:secondary-color
+          :color ,theme:on-secondary-color
+          :display "flex"
+          :justify-content "space-between"
+          :align-items "stretch"
+          :border-radius "3px")
+        '(".source-name > div"
+          :line-height "26px")
+        '(".source-name > div > button"
+          :padding "5px 5px 5px 0px"
+          :min-height "100%")
+        '("#next-source > svg, #previous-source > svg"
+          :margin-bottom "2px"
+          :height "5px")
+        '("#previous-source"
+          :padding 0)
+        '("#next-source"
+          :padding 0)
         `("#suggestions"
-          :background-color ,theme:background
-          :color ,theme:on-background
-          :overflow-y "hidden"
-          :overflow-x "hidden"
-          :height "100%"
-          :width "100%")
+          :color ,theme:on-background-color
+          :margin-right "3px"
+          :overflow "hidden")
+        `(".suggestion-and-mark-count"
+          :font-family ,theme:monospace-font-family)
         `(".source-content"
-          :background-color ,theme:background
-          :color ,theme:on-background
-          :margin-left "16px"
+          :box-sizing "border-box"
+          :padding-left "16px"
+          :margin-left "2px"
           :width "100%"
           :table-layout "fixed"
           (td
+           :color ,theme:on-background-color
+           :overflow "hidden"
+           :text-overflow "ellipsis"
+           :border-radius "2px"
            :white-space "nowrap"
            :height "20px"
-           :overflow "auto")
+           :padding-left "4px")
+          ("tr:not(:first-child)"
+           :font-family ,theme:monospace-font-family)
+          ("tr:hover"
+           :background-color ,theme:action-color-
+           :color ,theme:on-action-color
+           :cursor "pointer")
           (th
-           :background-color ,theme:primary
-           :color ,theme:on-primary
+           :background-color ,theme:secondary-color+
+           :color ,theme:on-secondary-color
            :font-weight "normal"
-           :padding-left "3px"
-           :text-align "left")
-          ("td::-webkit-scrollbar"
-           :display "none"))
+           :padding-left "4px"
+           :border-radius "2px"
+           :text-align "left"))
         `("#selection"
-          :background-color ,theme:accent
-          :color ,theme:on-accent)
+          :background-color ,theme:action-color
+          :color ,theme:on-action-color)
         `(.marked
-          :background-color ,theme:secondary
-          :color ,theme:on-secondary
+          :background-color ,theme:secondary-color
+          :color ,theme:on-secondary-color
           :font-weight "bold")
         `(.selected
-          :background-color ,theme:primary
-          :color ,theme:on-primary))
-      :documentation "The CSS applied to a prompt-buffer when it is set-up.")
-     (override-map
-      (make-keymap "override-map")
-      :type keymaps:keymap
-      :documentation "Keymap that takes precedence over all modes' keymaps.
-See `buffer's `override-map' for more details."))
+          :background-color ,theme:primary-color
+          :color ,theme:on-primary-color))
+      :documentation "The CSS applied to prompt buffer."))
     (:export-class-name-p t)
     (:export-accessor-names-p t)
     (:export-predicate-name-p t)
-    (:accessor-name-transformer (class*:make-name-transformer name))
     (:documentation "The prompt buffer is the interface for user interactions.
 Each prompt spawns a new object: this makes it possible to nest prompts, such as
 invoking `prompt-buffer:history'.
@@ -156,252 +250,295 @@ See `prompt' for how to invoke prompts.")
   (hooks:run-hook (prompt-buffer-make-hook *browser*) prompt-buffer)
   (enable-modes* (append (reverse (default-modes prompt-buffer))
                          (uiop:ensure-list extra-modes))
-                 prompt-buffer)
-  (when (or (invisible-input-p prompt-buffer)
-            (and (sera:single (prompter:sources prompt-buffer))
-                 ;; Using eq here because we don't want to trigger it for
-                 ;; raw-source subclasses, don't we?
-                 (eq 'prompter:raw-source
-                     (sera:class-name-of (first (prompter:sources prompt-buffer))))))
-    (setf (height prompt-buffer) :fit-to-prompt)))
+                 prompt-buffer))
+
+(defmethod (setf height) (value (prompt-buffer prompt-buffer))
+  (setf (ffi-height prompt-buffer)
+        (case value
+          (:default (round (/ (ffi-height (window prompt-buffer)) 3)))
+          (:fit-to-prompt
+           (ps-eval :buffer prompt-buffer
+             (+ (ps:chain (nyxt/ps:qs document "#prompt-area") offset-height)
+                ;; Buffer whitespace between the prompt buffer's input area and
+                ;; the status buffer.  Not clear how to the derive the value
+                ;; from another element's height.
+                4)))
+          (t value)))
+  (setf (slot-value prompt-buffer 'height) value))
 
 (export-always 'current-source)
 (defun current-source (&optional (prompt-buffer (current-prompt-buffer)))
-  (prompter:selected-source prompt-buffer))
+  "Current PROMPT-BUFFER `prompter:source'.
+If PROMPT-BUFFER is not provided, use `current-prompt-buffer'."
+  (prompter:current-source prompt-buffer))
 
 (export-always 'current-suggestion-value)
 (defun current-suggestion-value (&optional (prompt-buffer (current-prompt-buffer)))
-  "Return selected prompt-buffer suggestion value.
-Return source as second value.
-To access the suggestion instead, see `prompter:selected-suggestion'."
+  "Return selected PROMPT-BUFFER `prompter:suggestion' `prompter:value'.
+Return `prompter:source' as second value.
+To access the suggestion instead, see `prompter:%current-suggestion'."
   (multiple-value-bind (suggestion source)
-      (prompter:selected-suggestion prompt-buffer)
+      (prompter:%current-suggestion prompt-buffer)
     (values (when suggestion (prompter:value suggestion)) source)))
 
-(defun show-prompt-buffer (prompt-buffer &key (height (height prompt-buffer)))
-  "Show the last active prompt-buffer, if any.
-This is a low-level display function.
-See also `hide-prompt-buffer'."
-  ;; TODO: Add method that returns if there is only 1 source with no filter.
-  (when prompt-buffer
-    (push prompt-buffer (active-prompt-buffers (window prompt-buffer)))
-    (calispel:! (prompt-buffer-channel (window prompt-buffer)) prompt-buffer)
-    (prompt-render prompt-buffer)
-    (setf (ffi-height prompt-buffer)
-          (case height
-            (:default (prompt-buffer-open-height (window prompt-buffer)))
-            (:fit-to-prompt
-             (ps-eval :buffer prompt-buffer
-               (ps:chain (nyxt/ps:qs document "#prompt") offset-height)))
-            (t height)))
-    (run-thread "Show prompt watcher"
-      (let ((prompt-buffer prompt-buffer))
-        (update-prompt-input prompt-buffer)
-        (hooks:run-hook (prompt-buffer-ready-hook *browser*) prompt-buffer)))))
+(defmethod show-prompt-buffer ((prompt-buffer prompt-buffer))
+  (with-slots (window) prompt-buffer
+    (push prompt-buffer (active-prompt-buffers window))
+    (calispel:! (prompt-buffer-ready-channel window) prompt-buffer))
+  (prompt-render-skeleton prompt-buffer)
+  (prompt-render-focus prompt-buffer)
+  (prompt-render-suggestions prompt-buffer)
+  (setf (height prompt-buffer) (slot-value prompt-buffer 'height))
+  (ffi-focus-prompt-buffer prompt-buffer)
+  (run-thread "Show prompt watcher"
+    (update-prompt-input prompt-buffer)
+    (hooks:run-hook (prompt-buffer-ready-hook *browser*) prompt-buffer)))
 
-(defun hide-prompt-buffer (prompt-buffer)
-  "Hide PROMPT-BUFFER, display next active one.
-This is a low-level display function.
-See also `show-prompt-buffer'."
-  (let ((window (window prompt-buffer)))
-    ;; Note that PROMPT-BUFFER is not necessarily first in the list, e.g. a new
-    ;; prompt-buffer was invoked before the old one reaches here.
+(defmethod hide-prompt-buffer ((prompt-buffer prompt-buffer))
+  "Hide PROMPT-BUFFER and display the next active one, if any."
+  (with-slots (window) prompt-buffer
     (alex:deletef (active-prompt-buffers window) prompt-buffer)
     ;; The channel values are irrelevant, so is the element order:
-    (calispel:? (prompt-buffer-channel (window prompt-buffer)) 0)
-    (if (resumable-p prompt-buffer)
-        (flet ((prompter= (prompter1 prompter2)
-                 (and (string= (prompter:prompt prompter1)
-                               (prompter:prompt prompter2))
-                      (string= (prompter:input prompter1)
-                               (prompter:input prompter2)))))
-          ;; Delete previous, similar prompts, if any.
-          (mapc (lambda (old-prompt)
-                  (when (and (prompter= old-prompt prompt-buffer)
-                             (not (eq old-prompt prompt-buffer)))
-                    (ffi-buffer-delete old-prompt)))
-                (old-prompt-buffers *browser*))
-          (alex:deletef (old-prompt-buffers *browser*)
-                        prompt-buffer
-                        :test #'prompter=)
-          (push prompt-buffer (old-prompt-buffers *browser*)))
-        (ffi-buffer-delete prompt-buffer))
+    (calispel:? (prompt-buffer-ready-channel window) 0)
+    (ffi-buffer-delete prompt-buffer)
     (if (active-prompt-buffers window)
-        (let ((next-prompt-buffer (first (active-prompt-buffers window))))
-          (show-prompt-buffer next-prompt-buffer))
-        (setf (ffi-height prompt-buffer) 0))))
+        (show-prompt-buffer (first (active-prompt-buffers window)))
+        (ffi-window-set-buffer window (active-buffer window) :focus t))))
 
-(defun suggestion-and-mark-count (prompt-buffer suggestions marks
-                                  &key multi-selection-p pad-p)
+(defun suggestion-and-mark-count (prompt-buffer suggestions marks &key enable-marks-p pad-p)
   (alex:maxf (max-suggestions prompt-buffer)
              (length suggestions))
-  (labels ((decimals (n)
-             (cond
-               ((< n 0)
-                (decimals (- n)))
-               ((< n 10)
-                1)
-               (t (1+ (decimals (truncate n 10)))))))
-    (cond
-      ((not suggestions)
-       "")
-      ((hide-suggestion-count-p prompt-buffer)
-       "")
-      (t
-       (let ((padding (if pad-p
-                          (prin1-to-string (decimals (max-suggestions prompt-buffer)))
-                          "0")))
-         (format nil (str:concat "[~a~" padding ",,,' @a]")
-                 (cond
-                   ((or marks multi-selection-p)
-                    (format nil
-                            (str:concat "~" padding ",,,' @a/")
-                            (length marks)))
-                   (t ""))
-                 (length suggestions)))))))
+  (flet ((digits-count (n) (1+ (floor (log (abs n) 10)))))
+    (unless (or (not suggestions)
+                (hide-suggestion-count-p prompt-buffer))
+      (let ((padding (if pad-p
+                         (prin1-to-string (digits-count (max-suggestions prompt-buffer)))
+                         "0")))
+        (format nil
+                (str:concat "[~a~" padding ",,,' @a]")
+                (if (or marks enable-marks-p)
+                    (format nil (str:concat "~" padding ",,,' @a/") (length marks))
+                    "")
+                (length suggestions))))))
 
 (defun prompt-render-prompt (prompt-buffer)
-  (let* ((suggestions (prompter:all-suggestions prompt-buffer))
-         (marks (prompter:all-marks prompt-buffer))
-         ;; TODO: Should prompt-buffer be a status-buffer?
-         ;; Then no need to depend on the current status buffer.
-         (status-buffer (status-buffer (current-window))))
-    (ps-eval :async t :buffer prompt-buffer
-      (setf (ps:@ (nyxt/ps:qs document "#prompt-extra") |innerHTML|)
-            (ps:lisp
-             (suggestion-and-mark-count
-              prompt-buffer suggestions marks
-              :pad-p t
-              :multi-selection-p (some #'prompter:multi-selection-p
-                                       (prompter:sources prompt-buffer)))))
-      (setf (ps:@ (nyxt/ps:qs document "#prompt-modes") |innerHTML|)
-            (ps:lisp (str:join " "
-                               (mapcar (curry #'mode-status status-buffer)
-                                       (sort-modes-for-status (modes prompt-buffer)))))))))
+  (ps-eval :async t :buffer prompt-buffer
+    (setf (ps:@ (nyxt/ps:qs document "#prompt-extra") |innerHTML|)
+          (ps:lisp
+           (suggestion-and-mark-count prompt-buffer
+                                      (prompter:all-suggestions prompt-buffer)
+                                      (prompter:all-marks prompt-buffer)
+                                      :pad-p t
+                                      :enable-marks-p (some #'prompter:enable-marks-p
+                                                            (prompter:sources prompt-buffer)))))
+    (setf (ps:@ (nyxt/ps:qs document "#prompt-modes") |innerHTML|)
+          (ps:lisp (str:join " "
+                             (mapcar (curry #'mode-status
+                                            (status-buffer (current-window)))
+                                     (sort-modes-for-status (modes prompt-buffer))))))))
+
+(defmethod attribute-widths ((source prompter:source))
+  "Return the widths of SOURCE's attribute columns (as ratios)."
+  ;; In a proportion a:b, a is the "mean" and b is the "extreme".
+  (let* ((means (mapcar (lambda (attr) (getf (third attr) ':width))
+                        (prompter:active-attributes (first (prompter:suggestions source))
+                                                    :source source)))
+         (extreme (ignore-errors (reduce #'+ means))))
+    (if extreme
+        (mapcar (lambda (ratio) (/ ratio extreme)) means)
+        (let ((len (length means)))
+          (log:debug "Fallback on uniform width distribution for lack of allocation on ~a."
+                     source)
+          (make-list len :initial-element (/ 1 len))))))
+
+(defun render-attributes (source prompt-buffer)
+  (spinneret:with-html-string
+    (when (prompter:suggestions source)
+      (:table :class "source-content"
+              (:colgroup
+               (when (prompter:enable-marks-p source)
+                 (:col :style "width: 25px"))
+               (dolist (width (attribute-widths source))
+                 (:col :style (format nil "width: ~,2f%" (* 100 width)))))
+              (:tr
+               :style (if (sera:single (prompter:active-attributes-keys source))
+                          "display:none;"
+                          "display:revert;")
+               (when (prompter:enable-marks-p source) (:th " "))
+               (loop for attribute-key in (prompter:active-attributes-keys source)
+                     collect (:th (spinneret:escape-string attribute-key))))
+              (loop
+                ;; TODO: calculate how many lines fit in the prompt buffer
+                with max-suggestion-count = 8
+                repeat max-suggestion-count
+                with cursor-index = (prompter:current-suggestion-position prompt-buffer)
+                for suggestion-index from (max 0 (- cursor-index (- (/ max-suggestion-count 2) 1)))
+                for suggestion in (nthcdr suggestion-index (prompter:suggestions source))
+                collect
+                   (let ((suggestion-index suggestion-index)
+                         (cursor-index cursor-index))
+                     (:tr :id (when (equal (list suggestion source)
+                                           (multiple-value-list (prompter:%current-suggestion prompt-buffer)))
+                                "selection")
+                          :class (when (prompter:marked-p source (prompter:value suggestion))
+                                   "marked")
+                          (when (prompter:enable-marks-p source)
+                            (:td
+                             (:input
+                              :type "checkbox"
+                              :checked (prompter:marked-p source (prompter:value suggestion))
+                              :onchange (ps:ps
+                                          (nyxt/ps:lisp-eval
+                                           (:title "unmark-this-suggestion"
+                                            :buffer prompt-buffer)
+                                           (prompter::set-current-suggestion
+                                            prompt-buffer
+                                            (- suggestion-index cursor-index))
+                                           (prompter:toggle-mark prompt-buffer)
+                                           (prompter::set-current-suggestion
+                                            prompt-buffer
+                                            (- cursor-index suggestion-index))
+                                           (prompt-render-suggestions prompt-buffer))))))
+                          (loop for (nil attribute)
+                                  in (prompter:active-attributes suggestion :source source)
+                                collect (:td
+                                         :title attribute
+                                         :onclick (when (and (mouse-support-p prompt-buffer)
+                                                             (not (find :darwin *features*)))
+                                                    (ps:ps
+                                                      (cond
+                                                        ((or (ps:chain window event ctrl-key)
+                                                             (ps:chain window event shift-key))
+                                                         (nyxt/ps:lisp-eval
+                                                          (:title "mark-this-suggestion"
+                                                           :buffer prompt-buffer)
+                                                          (prompter::set-current-suggestion
+                                                           prompt-buffer
+                                                           (- suggestion-index cursor-index))
+                                                          (prompter:toggle-mark prompt-buffer)
+                                                          (prompter::set-current-suggestion
+                                                           prompt-buffer
+                                                           (- cursor-index suggestion-index))
+                                                          (prompt-render-suggestions prompt-buffer)))
+                                                        ((ps:chain window event alt-key)
+                                                         (nyxt/ps:lisp-eval
+                                                          (:title "return-this-suggestion-with-another-action"
+                                                           :buffer prompt-buffer)
+                                                          (prompter::set-current-suggestion
+                                                           prompt-buffer
+                                                           (- suggestion-index cursor-index))
+                                                          (uiop:symbol-call
+                                                           :nyxt/prompt-buffer-mode :set-action-on-return
+                                                           (nyxt::current-prompt-buffer))))
+                                                        (t
+                                                         (nyxt/ps:lisp-eval
+                                                          (:title "return-this-suggestion"
+                                                           :buffer prompt-buffer)
+                                                          (prompter::set-current-suggestion
+                                                           prompt-buffer
+                                                           (- suggestion-index cursor-index))
+                                                          (prompter:run-action-on-return
+                                                           (nyxt::current-prompt-buffer)))))))
+                                         (:raw attribute))))))))))
 
 (export 'prompt-render-suggestions)
 (defmethod prompt-render-suggestions ((prompt-buffer prompt-buffer))
-  "Refresh the rendering of the suggestion list.
-This does not redraw the whole prompt buffer, unlike `prompt-render'."
+  "Refresh the rendering of the suggestion list in PROMPT-BUFFER."
   (let* ((sources (prompter:sources prompt-buffer))
          (current-source-index (position (current-source prompt-buffer) sources))
          (last-source-index (1- (length sources))))
-    ;; TODO: Factor out attribute printing.
     (flet ((source->html (source)
              (spinneret:with-html-string
-               (:div :class "source"
-                     (:div :class "source-name"
-                           :style (if (and (hide-single-source-header-p prompt-buffer)
-                                           (sera:single sources))
-                                      "display:none;"
-                                      "display:revert")
-                           (:span :class "source-glyph" "☼")
-                           (prompter:name source)
-                           (if (prompter:hide-suggestion-count-p source)
-                               ""
-                               (suggestion-and-mark-count prompt-buffer
-                                                          (prompter:suggestions source)
-                                                          (prompter:marks source)
-                                                          :multi-selection-p (prompter:multi-selection-p source)))
-                           (if (prompter:ready-p source)
-                               ""
-                               "(In progress...)"))
-                     (when (prompter:suggestions source)
-                       (:table :class "source-content"
-                               (:tr :style (if (or (eq (prompter:hide-attribute-header-p source) :always)
-                                                   (and (eq (prompter:hide-attribute-header-p source) :single)
-                                                        (sera:single (prompter:active-attributes-keys source))))
-                                               "display:none;"
-                                               "display:revert;")
-                                    (loop for attribute-key in (prompter:active-attributes-keys source)
-                                          collect (:th attribute-key)))
-                               (loop ;; TODO: Only print as many lines as fit the height.  But how can we know in advance?
-                                     ;; Maybe first make the table, then add the element one by one _if_ there are into view.
-                                     with max-suggestion-count = 10
-                                     repeat max-suggestion-count
-                                     with cursor-index = (prompter:selected-suggestion-position prompt-buffer)
-                                     for suggestion-index from (max 0 (- cursor-index (/ max-suggestion-count 2)))
-                                     for suggestion in (nthcdr suggestion-index (prompter:suggestions source))
-                                     collect
-                                     (let ((suggestion-index suggestion-index)
-                                           (cursor-index cursor-index))
-                                       (:tr :id (when (equal (list suggestion source)
-                                                             (multiple-value-list (prompter:selected-suggestion prompt-buffer)))
-                                                  "selection")
-                                            :class (when (prompter:marked-p source (prompter:value suggestion))
-                                                     "marked")
-                                            :onmousedown (when (mouse-support-p prompt-buffer)
-                                                           (ps:ps
-                                                             (lambda (event)
-                                                               (nyxt/ps:lisp-eval
-                                                                (:title "choose-this-suggestion"
-                                                                 :buffer prompt-buffer)
-                                                                (prompter::select (current-prompt-buffer)
-                                                                  (- suggestion-index cursor-index)))
-                                                               (cond
-                                                                 ;; Ctrl-click to mark a single suggestion.
-                                                                 ;; TODO: Shift-click to mark a region.
-                                                                 ((or (ps:@ event meta-key)
-                                                                      (ps:@ event ctrl-key))
-                                                                  (nyxt/ps:lisp-eval
-                                                                   (:title "mark-this-suggestion"
-                                                                    :buffer prompt-buffer)
-                                                                   (funcall (read-from-string "nyxt/prompt-buffer-mode:toggle-mark")
-                                                                            prompt-buffer)))
-                                                                 (t (nyxt/ps:lisp-eval
-                                                                     (:title "return-this-suggestion"
-                                                                      :buffer prompt-buffer)
-                                                                     (prompter:return-selection
-                                                                      (nyxt::current-prompt-buffer))))))))
-                                            (loop for (nil attribute attribute-display)
-                                                    in (prompter:active-attributes suggestion :source source)
-                                                  collect (:td :title attribute
-                                                               (if attribute-display
-                                                                   (:raw attribute-display)
-                                                                   attribute))))))))))))
-      (ps-eval :buffer prompt-buffer
+               (:div.source
+                (:div.source-name
+                 (:div
+                  #-darwin
+                  (:nbutton
+                    :id "next-source"
+                    :text (:raw (gethash "down.svg" *static-data*))
+                    :title (format nil "Next source (~a)"
+                                   (binding-keys (sym:resolve-symbol :next-source
+                                                                     :command)
+                                                 :modes (modes prompt-buffer)))
+                    :buffer prompt-buffer
+                    '(funcall (sym:resolve-symbol :next-source :command)))
+                  #-darwin
+                  (:nbutton
+                    :id "previous-source"
+                    :text (:raw (gethash "up.svg" *static-data*))
+                    :title (format nil "Previous source (~a)"
+                                   (binding-keys (sym:resolve-symbol :previous-source
+                                                                     :command)
+                                                 :modes (modes prompt-buffer)))
+                    :buffer prompt-buffer
+                    '(funcall (sym:resolve-symbol :previous-source :command)))
+                  (prompter:name source)
+                  (:span
+                   :class "suggestion-and-mark-count"
+                   ;; To hide the suggestion count for the source, subclass
+                   ;; `prompter:source' and handle the condition.  Note that
+                   ;; `suggestion-and-mark-count' relies on the global prompt
+                   ;; value `hide-suggestion-count-p'.
+                   (suggestion-and-mark-count prompt-buffer
+                                              (prompter:suggestions source)
+                                              (prompter:marks source)
+                                              :enable-marks-p (prompter:enable-marks-p source)))
+                  (when (not (prompter:ready-p source)) "(In progress...)"))
+                 (:div
+                  #-darwin
+                  (:nbutton
+                    :id "toggle-attributes"
+                    :text (:raw (gethash "plus-minus.svg" *static-data*))
+                    :title (format nil "Toggle attributes display (~a)"
+                                   (binding-keys (sym:resolve-symbol 'toggle-attributes-display
+                                                                     :command)
+                                                 :modes (modes prompt-buffer)))
+                    :buffer prompt-buffer
+                    `(funcall (sym:resolve-symbol :toggle-attributes-display :command)
+                              :source ,source))))
+                (:raw (render-attributes source prompt-buffer))))))
+      (ps-eval :async t :buffer prompt-buffer
         (setf (ps:@ (nyxt/ps:qs document "#suggestions") |innerHTML|)
               (ps:lisp
                (sera:string-join (loop for i from current-source-index to last-source-index
                                        for source = (nth i sources)
-                                       collect (source->html source))
+                                       unless (null (prompter:suggestions source))
+                                         collect (source->html source))
                                  +newline+)))))
     (prompt-render-prompt prompt-buffer)))
 
-(defun erase-document (prompt-buffer)
-  (ps-eval :async t :buffer prompt-buffer
-    (ps:chain document (open))
-    (ps:chain document (close))))
-
 (defun prompt-render-skeleton (prompt-buffer)
-  (erase-document prompt-buffer)
-  (html-set (spinneret:with-html-string
-              (:head
-               (:nstyle (style prompt-buffer)))
-              (:body
-               (:div :id "prompt-area"
-                     (:div :id "prompt" (:mayberaw (prompter:prompt prompt-buffer)))
-                     (:div :id "prompt-extra" "[?/?]")
-                     (:div (:input :type (if (invisible-input-p prompt-buffer)
-                                             "password"
-                                             "text")
-                                   :id "input"
-                                   :value (prompter:input prompt-buffer)))
-                     (:div :id "prompt-modes" ""))
-               (:div :id "suggestions"
-                     :style (if (invisible-input-p prompt-buffer)
-                                "visibility:hidden;"
-                                "visibility:visible;"))))
-            prompt-buffer))
+  (html-write (spinneret:with-html-string
+                (:head (:nstyle (style prompt-buffer)))
+                (:body
+                 (:div
+                  :id "root"
+                  (:div
+                   :id "prompt-area"
+                   (:div :id "prompt" (prompter:prompt prompt-buffer))
+                   (:div :id "prompt-extra" :class "arrow-right" "[?/?]")
+                   (:div :id "prompt-input"
+                         (:input :type (if (invisible-input-p prompt-buffer)
+                                           "password"
+                                           "text")
+                                 :id "input"
+                                 :value (prompter:input prompt-buffer)))
+                   (:div :id "prompt-modes" :class "arrow-left" "")
+                   (:div :id "close-button" :class "arrow-left"
+                         (:nbutton
+                           :text "×"
+                           :title "Close prompt"
+                           :buffer prompt-buffer
+                           '(funcall (sym:resolve-symbol :quit-prompt-buffer :command)))))
+                  (:div :id "suggestions"
+                        :style (if (invisible-input-p prompt-buffer)
+                                   "visibility:hidden;"
+                                   "visibility:visible;")))))
+              prompt-buffer))
 
 (defun prompt-render-focus (prompt-buffer)
   (ps-eval :async t :buffer prompt-buffer
     (ps:chain (nyxt/ps:qs document "#input") (focus))))
-
-(defmethod prompt-render ((prompt-buffer prompt-buffer)) ; TODO: Merge into `show-prompt-buffer'?
-  (prompt-render-skeleton prompt-buffer)
-  (prompt-render-focus prompt-buffer)
-  (prompt-render-suggestions prompt-buffer))
 
 (defun update-prompt-input (prompt-buffer &optional input)
   "This blocks and updates the view.
@@ -414,7 +551,8 @@ If you want to set the input, see `set-prompt-buffer-input'."
     (setf (prompter:input prompt-buffer) input)
     ;; TODO: Stop loop when prompt-buffer is no longer current.
     (labels ((maybe-update-view ()
-               (let ((next-source (when (find prompt-buffer (active-prompt-buffers (window prompt-buffer)))
+               (let ((next-source (when (find prompt-buffer
+                                              (active-prompt-buffers (window prompt-buffer)))
                                     (prompter:next-ready-p prompt-buffer))))
                  (cond
                    ;; Nothing to do:
@@ -438,7 +576,7 @@ If you want to set the input, see `set-prompt-buffer-input'."
 (defun set-prompt-buffer-input (input &optional (prompt-buffer (current-prompt-buffer)))
   "Set HTML INPUT in PROMPT-BUFFER.
 See `update-prompt-input' to update the changes visually."
-  (ps-eval :buffer prompt-buffer
+  (ps-eval :async t :buffer prompt-buffer
     (setf (ps:@ (nyxt/ps:qs document "#input") value)
           (ps:lisp input)))
   (update-prompt-input prompt-buffer input))
@@ -456,12 +594,11 @@ See `update-prompt-input' to update the changes visually."
        (error 'prompt-buffer-canceled)))))
 
 (sera:eval-always
-  (defvar %prompt-args (delete-duplicates
-                        (append
-                         (public-initargs 'prompt-buffer)
-                         (public-initargs 'prompter:prompter)
-                         ;; `customize-instance' `:after' arguments:
-                         '(extra-modes)))))
+  (defvar %prompt-args (delete-duplicates (append
+                                           (mopu:direct-slot-names 'prompt-buffer)
+                                           (mopu:direct-slot-names 'prompter:prompter)
+                                           ;; `customize-instance' `:after' arguments:
+                                           '(extra-modes)))))
 (export-always 'prompt)
 (sera:eval-always
   (defun prompt #.(append '(&rest args) `(&key ,@%prompt-args))
@@ -477,25 +614,19 @@ Example use:
 
 See the documentation of `prompt-buffer' to know more about the options."
     (declare #.(cons 'ignorable %prompt-args))
-    (unless *interactive-p*
-      (restart-case
-          (error 'prompt-buffer-non-interactive :name prompter:prompt)
-        (prompt-anyway () nil)
-        (cancel () (error 'prompt-buffer-canceled))))
-    (alex:when-let ((prompt-text (getf args :prompt)))
+    (when-let ((prompt-text (getf args :prompt)))
       (when (str:ends-with-p ":" prompt-text)
         (log:warn "Prompt text ~s should not end with a ':'." prompt-text)
         (setf (getf args :prompt) (string-right-trim (uiop:strcat ":" serapeum:whitespace) prompt-text))))
     (let ((prompt-object-channel (make-channel 1)))
       (ffi-within-renderer-thread
-       *browser*
        (lambda ()
-         (let ((prompt-buffer (apply #'make-instance 'prompt-buffer
+         (let ((prompt-buffer (apply #'make-instance
+                                     'prompt-buffer
                                      (append args
-                                             (list
-                                              :window (current-window)
-                                              :result-channel (make-channel)
-                                              :interrupt-channel (make-channel))))))
+                                             (list :window (current-window)
+                                                   :result-channel (make-channel)
+                                                   :interrupt-channel (make-channel))))))
            (calispel:! prompt-object-channel prompt-buffer))))
       (let ((new-prompt (calispel:? prompt-object-channel)))
         (wait-on-prompt-buffer new-prompt)))))
@@ -507,23 +638,7 @@ See the documentation of `prompt-buffer' to know more about the options."
     (declare #.(cons 'ignorable %prompt-args))
     (first (apply #'prompt args))))
 
-(define-class resume-prompt-source (prompter:source)
-  ((prompter:name "Resume prompters")
-   (prompter:constructor (old-prompt-buffers *browser*))
-   ;; TODO: Remove duplicates.
-   ;; TODO: History?
-   ))
-
 (defmethod prompter:object-attributes ((prompt-buffer prompt-buffer) (source prompter:source))
   (declare (ignore source))
   `(("Prompt" ,(prompter:prompt prompt-buffer))
     ("Input" ,(prompter:input prompt-buffer))))
-
-(define-command resume-prompt ()
-  "Query an older prompt and resume it."
-  (let ((old-prompt (prompt1 :prompt "Resume prompt session"
-                             :resumable-p nil
-                             :sources 'resume-prompt-source)))
-    (when old-prompt
-      (prompter:resume old-prompt)
-      (wait-on-prompt-buffer old-prompt))))

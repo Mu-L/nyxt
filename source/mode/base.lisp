@@ -14,15 +14,16 @@ This mode is a good candidate to be passed to `make-buffer'."
       (list
        "C-l" 'set-url
        "M-l" 'set-url-new-buffer
-       "C-M-l" 'set-url-new-nosave-buffer
        "C-r" 'reload-current-buffer
        "M-r" 'reload-buffers
        "C-shift-tab" 'switch-buffer-previous
        "C-tab" 'switch-buffer-next
        "C-T" 'reopen-buffer
        "C-t" 'make-buffer-focus
+       "M-o" 'toggle-prompt-buffer-focus
        "f1 r" 'manual
        "f1 t" 'tutorial
+       "f1 a" 'describe-any
        "f1 b" 'describe-bindings
        "f1 C" 'describe-class
        "f1 c" 'describe-command
@@ -32,11 +33,10 @@ This mode is a good candidate to be passed to `make-buffer'."
        "f1 s" 'describe-slot
        "f1 v" 'describe-variable
        "f11" 'toggle-fullscreen
-       "C-j" 'nyxt/download-mode:list-downloads
+       "C-Y" 'nyxt/mode/download:list-downloads
        "C-space" 'execute-command
        "C-M-space" 'execute-extended-command
-       "C-shift-space" 'execute-predicted-command
-       "M-space" 'resume-prompt)
+       "C-shift-space" 'execute-predicted-command)
       keyscheme:cua
       (list
        "f5" 'reload-current-buffer
@@ -49,13 +49,12 @@ This mode is a good candidate to be passed to `make-buffer'."
        "C-pageup" 'switch-buffer-previous
        "C-w" 'delete-current-buffer
        "C-n" 'make-window
-       "C-shift-W" 'delete-current-window
        "C-W" 'delete-current-window
        "M-w" 'delete-window
        "M-c l" 'copy-url
        "M-c t" 'copy-title
        "C-O" 'load-file
-       "C-o" 'nyxt/file-manager-mode:open-file
+       "C-o" 'nyxt/mode/file-manager:open-file
        "C-q" 'quit)
       keyscheme:emacs
       (list
@@ -63,14 +62,16 @@ This mode is a good candidate to be passed to `make-buffer'."
        "C-x C-left" 'switch-buffer-previous
        "C-x right" 'switch-buffer-next
        "C-x C-right" 'switch-buffer-next
+       "C-x o" 'toggle-prompt-buffer-focus
        "C-x b" 'switch-buffer
        "C-x k" 'delete-buffer
        "C-x C-k" 'delete-current-buffer
-       "C-x C-b" 'nyxt/buffer-listing-mode::list-buffers
+       "C-x C-b" 'nyxt/mode/buffer-listing::list-buffers
        "C-M-l" 'copy-url
        "C-M-t" 'copy-title
        "C-h t" 'tutorial
        "C-h r" 'manual
+       "C-h a" 'describe-any
        "C-h b" 'describe-bindings
        "C-h C" 'describe-class
        "C-h c" 'describe-command
@@ -79,28 +80,27 @@ This mode is a good candidate to be passed to `make-buffer'."
        "C-h p" 'describe-package
        "C-h s" 'describe-slot
        "C-h v" 'describe-variable
-       "C-d" 'nyxt/download-mode:list-downloads
+       "C-d" 'nyxt/mode/download:list-downloads
        "C-x 5 2" 'make-window
        "C-x 5 0" 'delete-current-window
        "C-x 5 1" 'delete-window
-       "C-x C-f" 'nyxt/file-manager-mode:open-file
+       "C-x C-f" 'nyxt/mode/file-manager:open-file
        "M-x" 'execute-command
        "C-M-x" 'execute-extended-command
-       "M-1" (read-from-string "nyxt/repeat-mode:repeat-key")
-       "M-2" (read-from-string "nyxt/repeat-mode:repeat-key")
-       "M-3" (read-from-string "nyxt/repeat-mode:repeat-key")
-       "M-4" (read-from-string "nyxt/repeat-mode:repeat-key")
-       "M-5" (read-from-string "nyxt/repeat-mode:repeat-key")
-       "M-6" (read-from-string "nyxt/repeat-mode:repeat-key")
-       "M-7" (read-from-string "nyxt/repeat-mode:repeat-key")
-       "M-8" (read-from-string "nyxt/repeat-mode:repeat-key")
-       "M-9" (read-from-string "nyxt/repeat-mode:repeat-key")
+       "M-1" (read-from-string "nyxt/mode/repeat:repeat-key")
+       "M-2" (read-from-string "nyxt/mode/repeat:repeat-key")
+       "M-3" (read-from-string "nyxt/mode/repeat:repeat-key")
+       "M-4" (read-from-string "nyxt/mode/repeat:repeat-key")
+       "M-5" (read-from-string "nyxt/mode/repeat:repeat-key")
+       "M-6" (read-from-string "nyxt/mode/repeat:repeat-key")
+       "M-7" (read-from-string "nyxt/mode/repeat:repeat-key")
+       "M-8" (read-from-string "nyxt/mode/repeat:repeat-key")
+       "M-9" (read-from-string "nyxt/mode/repeat:repeat-key")
        "C-x C-c" 'quit)
       keyscheme:vi-normal
       (list
        "o" 'set-url
        "O" 'set-url-new-buffer
-       "g o" 'set-url-new-nosave-buffer
        "R" 'reload-current-buffer
        "r" 'reload-buffers
        "u" 'reopen-buffer
@@ -117,14 +117,14 @@ This mode is a good candidate to be passed to `make-buffer'."
        "y u" 'copy-url
        "y t" 'copy-title
        ":" 'execute-command
-       "1" (read-from-string "nyxt/repeat-mode:repeat-key")
-       "2" (read-from-string "nyxt/repeat-mode:repeat-key")
-       "3" (read-from-string "nyxt/repeat-mode:repeat-key")
-       "4" (read-from-string "nyxt/repeat-mode:repeat-key")
-       "5" (read-from-string "nyxt/repeat-mode:repeat-key")
-       "6" (read-from-string "nyxt/repeat-mode:repeat-key")
-       "7" (read-from-string "nyxt/repeat-mode:repeat-key")
-       "8" (read-from-string "nyxt/repeat-mode:repeat-key")
-       "9" (read-from-string "nyxt/repeat-mode:repeat-key")
+       "1" (read-from-string "nyxt/mode/repeat:repeat-key")
+       "2" (read-from-string "nyxt/mode/repeat:repeat-key")
+       "3" (read-from-string "nyxt/mode/repeat:repeat-key")
+       "4" (read-from-string "nyxt/mode/repeat:repeat-key")
+       "5" (read-from-string "nyxt/mode/repeat:repeat-key")
+       "6" (read-from-string "nyxt/mode/repeat:repeat-key")
+       "7" (read-from-string "nyxt/mode/repeat:repeat-key")
+       "8" (read-from-string "nyxt/mode/repeat:repeat-key")
+       "9" (read-from-string "nyxt/mode/repeat:repeat-key")
        "Z Z" 'quit))))
   (:toggler-command-p nil))

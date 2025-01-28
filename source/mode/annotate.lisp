@@ -1,19 +1,29 @@
 ;;;; SPDX-FileCopyrightText: Atlas Engineer LLC
 ;;;; SPDX-License-Identifier: BSD-3-Clause
 
-(nyxt:define-package :nyxt/annotate-mode
-  (:documentation "Mode to annotate documents.
-Annotations are persisted to disk."))
-(in-package :nyxt/annotate-mode)
+(nyxt:define-package :nyxt/mode/annotate
+  (:documentation "Package for `annotate-mode', mode to annotate documents.
+
+The most important piece of functionality is the `annotation' class and its
+subclasses: `url-annotation' and `snippet-annotation'.
+
+See the `annotate-mode' for the external user-facing APIs."))
+(in-package :nyxt/mode/annotate)
 
 (define-mode annotate-mode ()
   "Annotate document with arbitrary comments.
-Annotations are persisted to disk, see the `annotations-file' mode slot."
+Annotations are persisted to disk, see the `annotations-file' mode slot.
+
+See `nyxt/mode/annotate' package documentation for implementation details and
+internal programming APIs."
   ((visible-in-status-p nil)
    (annotations-file
     (make-instance 'annotations-file)
     :type annotations-file
     :documentation "File where annotations are saved.")))
+
+(define-configuration context-buffer
+  ((default-modes (cons 'annotate-mode %slot-value%))))
 
 (defmethod annotations-file ((buffer buffer))
   (annotations-file (find-submode 'annotate-mode buffer)))
@@ -21,8 +31,7 @@ Annotations are persisted to disk, see the `annotations-file' mode slot."
 (define-class annotations-file (files:data-file nyxt-lisp-file)
   ((files:base-path #p"annotations")
    (files:name "annotations"))
-  (:export-class-name-p t)
-  (:accessor-name-transformer (class*:make-name-transformer name)))
+  (:export-class-name-p t))
 
 (define-class annotation ()
   ((data
@@ -35,45 +44,52 @@ Annotations are persisted to disk, see the `annotations-file' mode slot."
    (date (time:now)))
   (:export-class-name-p t)
   (:export-accessor-names-p t)
-  (:accessor-name-transformer (class*:make-name-transformer name)))
+  (:documentation "An umbrella annotation type.
+Should not be instantiated on its own. Instead, use `url-annotation' and
+`snippet-annotation'."))
 
 (define-class url-annotation (annotation)
   ((url nil)
    (page-title ""))
   (:export-class-name-p t)
   (:export-accessor-names-p t)
-  (:accessor-name-transformer (class*:make-name-transformer name)))
+  (:documentation "Annotation for a page with a certain URL.
+Command to create one is `annotate-current-url'."))
 
 (define-class snippet-annotation (url-annotation)
   ((snippet nil :documentation "The snippet of text being annotated."))
   (:export-class-name-p t)
   (:export-accessor-names-p t)
-  (:accessor-name-transformer (class*:make-name-transformer name)))
+  (:documentation "Annotation in relation to a text on a certain page.
+The page is handled by underlying `url-annotation', while the snippet is
+extracted by `annotate-highlighted-text' command."))
 
 ;; TODO: Wrap in <div>s with special CSS classes.
 (defmethod render ((annotation url-annotation))
   (spinneret:with-html-string
     (:dl
      (:dt "URL")
-     (:dd (render-url (url annotation)))
+     (:dd (:a :href (url annotation) (url annotation)))
      (:dt "Title")
-     (:dd (snippet annotation))
+     (:dd (page-title annotation))
      (:dt "Tags")
-     (:dd (format nil "~{~a ~}" (tags annotation))))
-    (:p (data annotation))))
+     (:dd (:pre (format nil "~{~a ~}" (tags annotation))))
+     (:dt "Text")
+     (:dd (data annotation)))))
 
 (defmethod render ((annotation snippet-annotation))
   (spinneret:with-html-string
     (:dl
      (:dt "URL")
-     (:dd (render-url (url annotation)))
+     (:dd (:a :href (url annotation) (url annotation)))
      (:dt "Title")
      (:dd (page-title annotation))
      (:dt "Snippet")
      (:dd (snippet annotation))
      (:dt "Tags")
-     (:dd (format nil "~{~a ~}" (tags annotation))))
-    (:p (data annotation))))
+     (:dd (:pre (format nil "~{~a ~}" (tags annotation))))
+     (:dt "Text")
+     (:dd (data annotation)))))
 
 (defun annotation-add (annotation)
   (files:with-file-content (annotations (annotations-file (current-buffer)))
@@ -91,7 +107,7 @@ Annotations are persisted to disk, see the `annotations-file' mode slot."
             :prompt "Tag(s)"
             :sources (list (make-instance 'prompter:word-source
                                           :name "New tags"
-                                          :multi-selection-p t)
+                                          :enable-marks-p t)
                            (make-instance 'keyword-source :buffer buffer)
                            (make-instance 'annotation-tag-source)))))
   "Create an annotation of the URL of BUFFER.
@@ -113,7 +129,7 @@ DATA and TAGS are passed as arguments to `url-annotation' make-instance."
             :prompt "Tag(s)"
             :sources (list (make-instance 'prompter:word-source
                                           :name "New tags"
-                                          :multi-selection-p t)
+                                          :enable-marks-p t)
                            (make-instance 'keyword-source :buffer buffer)
                            (make-instance 'annotation-tag-source)))))
   "Create an annotation for the highlighted text of BUFFER.
@@ -131,18 +147,19 @@ make-instance."
   "Show the ANNOTATIONS in a new buffer"
   (spinneret:with-html-string
     (:h1 "Annotations")
-    (loop for annotation in annotations
-          collect (:div (:raw (render annotation))
-                        (:hr)))))
+    (or
+     (loop for annotation in annotations
+           collect (:div (:raw (render annotation))
+                         (:hr)))
+     (:p "No annotations available."))))
 
 (define-internal-page show-annotations-for-current-url (&key (id (id (current-buffer))))
     (:title "*Annotations*")
-  "Create a new buffer with the annotations of the current URL of BUFFER."
-  (let ((source-buffer (nyxt::buffers-get id))
-        (annotations (files:content (annotations-file buffer))))
-    (let ((filtered-annotations (sera:filter (curry #'url-equal (url source-buffer))
-                                             annotations :key #'url)))
-      (render-annotations filtered-annotations))))
+  "Display the annotations associated to buffer with ID."
+  (let ((buffer (nyxt::buffers-get id)))
+    (render-annotations (sera:filter (curry #'url-equal (url buffer))
+                                     (files:content (annotations-file buffer))
+                                     :key (compose #'quri:uri #'url)))))
 
 (define-command-global show-annotations-for-current-url (&key (buffer (current-buffer)))
   "Create a new buffer with the annotations of the current URL of BUFFER."
@@ -151,7 +168,8 @@ make-instance."
 (define-class annotation-source (prompter:source)
   ((prompter:name "Annotations")
    (prompter:constructor (files:content (annotations-file (current-buffer))))
-   (prompter:multi-selection-p t)))
+   (prompter:filter-preprocessor #'prompter:filter-exact-matches)
+   (prompter:enable-marks-p t)))
 
 (define-class annotation-tag-source (prompter:source)
   ((prompter:name "Tags")
@@ -164,24 +182,19 @@ make-instance."
    (prompter:filter
     (lambda (suggestion source input)
       (prompter:fuzzy-match suggestion source (last-word input))))
-   (prompter:multi-selection-p t)
+   (prompter:enable-marks-p t)
    (prompter:constructor
     (let ((annotations (files:content (annotations-file (current-buffer)))))
       (sort (remove-duplicates
              (mappend #'tags annotations)
              :test #'string-equal)
-            #'string-lessp))))
-  (:accessor-name-transformer (class*:make-name-transformer name)))
+            #'string-lessp)))))
 
 (define-internal-page-command-global show-annotation ()
     (buffer "*Annotations*")
-  "Show an annotation(s)."
-  (let ((selected-annotations
-          (prompt
-           :prompt "Show annotation(s)"
-           :sources (make-instance 'annotation-source
-                                   :return-actions #'identity))))
-    (render-annotations selected-annotations)))
+  "Show prompted annotations."
+  (render-annotations (prompt :prompt "Show annotation(s)"
+                              :sources (make-instance 'annotation-source))))
 
 (define-internal-page-command-global show-annotations ()
     (buffer "*Annotations*")

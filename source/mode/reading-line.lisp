@@ -1,19 +1,22 @@
 ;;;; SPDX-FileCopyrightText: Atlas Engineer LLC
 ;;;; SPDX-License-Identifier: BSD-3-Clause
 
-(nyxt:define-package :nyxt/reading-line-mode
-    (:documentation "Mode for drawing a line to keep track of the reading position."))
-(in-package :nyxt/reading-line-mode)
+(nyxt:define-package :nyxt/mode/reading-line
+  (:documentation "Package for `reading-line-mode', for drawing a line to keep track of the
+reading position."))
+(in-package :nyxt/mode/reading-line)
 
 (define-mode reading-line-mode ()
   "Mode for drawing a line on screen that you can use to keep track of
-your reading position. To use this mode, first enable this mode and
-then use the bindings for `reading-line-cursor-up' and
-`reading-line-cursor-down' to move the reading line cursor. If you
-navigate away from the reading line, you can always invoke the command
-`jump-to-reading-line-cursor' to jump back to your reading
-position. To remove the reading line from the screen, disable this
-mode."
+your reading position.
+
+Commands:
+
+- `reading-line-cursor-up' and `reading-line-cursor-down' to move the reading
+  line cursor.
+
+- `jump-to-reading-line-cursor': If you navigate away from the reading line, you
+  can always invoke this command to jump back to your reading position."
   ((rememberable-p nil)
    (visible-in-status-p nil)
    (keyscheme-map
@@ -36,7 +39,7 @@ mode."
               :top "10px"
               :left "0"
               :width "100%"
-              :background-color ,theme:primary
+              :background-color ,theme:primary-color
               :z-index ,(1- (expt 2 31)) ; 32 bit signed integer max
               :opacity "15%"
               :height "20px"))
@@ -48,8 +51,7 @@ mode."
     (ps:chain (nyxt/ps:qs document "#reading-line-cursor") (scroll-into-view-if-needed))))
 
 (define-command reading-line-cursor-up (&key (step-size 20) (buffer (current-buffer)))
-  "Move the reading line cursor up. If scrolling off screen, move the
-screen as well."
+  "Move the reading line cursor up."
   (ps-eval :buffer buffer
     (let ((original-position
             (ps:chain (parse-int
@@ -59,7 +61,7 @@ screen as well."
   (jump-to-reading-line-cursor :buffer buffer))
 
 (define-command reading-line-cursor-down (&key (step-size 20) (buffer (current-buffer)))
-  "Move the reading line cursor down. If scrolling off screen, move the screen as well."
+  "Move the reading line cursor down."
   (ps-eval :buffer buffer
     (let ((original-position
             (ps:chain (parse-int

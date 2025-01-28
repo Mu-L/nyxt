@@ -1,8 +1,5 @@
-# Inspired by http://3bb.cc/blog/2020/09/11/github-ci/.
 name: Tests
 
-# We tell GitHub to not duplicate the checks in pull requests.  See
-# https://github.community/t/how-to-trigger-an-action-on-push-or-pull-request-but-not-both/16662/15
 on:
   push:
     branches: [ master ]
@@ -12,92 +9,78 @@ on:
 
 jobs:
   test:
-    name: ${{ matrix.lisp }} on ${{ matrix.os }}
+    name: ${{matrix.renderer}} on ${{matrix.os}}
     strategy:
       matrix:
-        # Use ccl-bin/1.12.1 instead of 'ccl' because of
-        # https://github.com/roswell/roswell/issues/534.
-        # TODO: Revert when Roswell is functional again.
-        lisp: [sbcl-bin, ccl-bin/1.12.1]
-        renderer: [gi-gtk]
-        rosargs: [dynamic-space-size=3072]
-        os: [ ubuntu-latest ]
-
-    # run the job on every combination of "lisp" and "os" above
-    runs-on: ${{ matrix.os }}
+        renderer: [gi-gtk,electron]
+        os: [ubuntu-latest,macos-latest]
+        exclude:
+          - os: macos-latest
+            renderer: gi-gtk
+    runs-on: ${{matrix.os}}
 
     steps:
-    # Check out your repository under $GITHUB_WORKSPACE, so your job can access it
-    - uses: actions/checkout@v2
-
-    - name: Cache .roswell
-      id: cache-dot-roswell
-      uses: actions/cache@v1
+    - name: Checkout
+      uses: actions/checkout@v4
       with:
-        path: ~/.roswell
-        key: ${{ runner.os }}-dot-roswell-${{ matrix.lisp }}-${{ hashFiles('**/*.asd') }}
-        restore-keys: |
-          ${{ runner.os }}-dot-roswell-${{ matrix.lisp }}-
-          ${{ runner.os }}-dot-roswell-
+        show-progress: 'false'
+        submodules: 'true'
 
-    - name: Install dependencies
-      shell: bash
-      run: |
-        sudo apt-get update -qq
-        sudo apt-get install -y git
-        sudo apt-get install -y libfixposix3 libfixposix-dev libwebkit2gtk-4.0-dev glib-networking gsettings-desktop-schemas xclip enchant-2
+    - name: Install nix
+      uses: cachix/install-nix-action@v27
+      with:
+        nix_path: nixpkgs=channel:nixos-unstable
 
-    - name: Install Roswell
-      shell: bash
-      # always run install, since it does some global installs and setup that isn't cached
+    - name: Compile ${{matrix.renderer}} port on ${{matrix.os}}
+      run: nix-shell shell.nix --run 'make all NYXT_RENDERER=${{matrix.renderer}}'
+
+    - name: Test ${{matrix.renderer}} port on ${{matrix.os}}
       env:
-       LISP: ${{ matrix.lisp }}
-      # TODO: Update Roswell to latest version (may need Ubuntu 20.* or above).
-      run: curl -L https://raw.githubusercontent.com/roswell/roswell/v21.10.14.111/scripts/install-for-ci.sh | sh -x
+        NASDF_NON_INTERACTIVE_TESTS: true
+      # It runs the tests for system nyxt, not nyxt/${{matrix.renderer}}.
+      run: nix-shell shell.nix --run 'make check'
 
-    - name: Check Lisp
-      continue-on-error: true
-      shell: bash
-      run: |
-        ros ${{ matrix.rosargs }} -e '(format t "~&~a:~a on ~a~%" (lisp-implementation-type) (lisp-implementation-version) (machine-type))'
-        ros ${{ matrix.rosargs }} -e '(format t "ASDF: ~a~%" (asdf:asdf-version))'
-        ros ${{ matrix.rosargs }} -e '(format t "fixnum bits: ~a~%" (integer-length most-positive-fixnum))'
-        ros ${{ matrix.rosargs }} -e '(format t "features: ~s~%" *features*)'
-
-    - name: Fetch Common Lisp third-party dependencies
-      shell: bash
-      run: |
-        ros ${{ matrix.rosargs }} -e '(asdf:load-system :nyxt/submodules)'
-        mkdir -p ~/.config/common-lisp/source-registry.conf.d/
-        echo "(:tree \"$PWD/_build/submodules\")" > ~/.config/common-lisp/source-registry.conf.d/asdf.conf
-
-    - name: Load Nyxt
-      shell: bash
-      run: |
-        ros ${{ matrix.rosargs }} -e '(asdf:load-system :nyxt/submodules)' -e '(handler-case (asdf:load-system :nyxt/${{matrix.renderer}}-application) (error (a) (format t "caught error ~s~%~a~%" a a) (uiop:quit 17)))'
-
-    - name: Build Nyxt executable
-      shell: bash
-      ## CCL build binary does not work for now, needs more investigation.
-      if: ${{ matrix.lisp != 'ccl-bin/1.12.1' }}
-      run: |
-        rm -f nyxt
-        make all LISP=ros LISP_FLAGS="${{ matrix.rosargs }} run -- --no-userinit --non-interactive"
-
-    - name: Run tests
-      shell: bash
-      # Export CI to tell ASDF to quit on test errors.
+    - name: Test history-tree
       env:
-       NASDF_TESTS_QUIT_ON_FAIL: yes
-      run: |
-        ros ${{ matrix.rosargs }} -e '(asdf:load-system :nyxt/submodules)' -e '(handler-case (asdf:load-system :nyxt/tests) (error (a) (format t "caught error ~s~%~a~%" a a) (uiop:quit 17)))' -e '(asdf:test-system :nyxt)'
+        NASDF_NON_INTERACTIVE_TESTS: true
+      run: nix-shell shell.nix --run "sbcl --eval '(require \"asdf\")' --eval '(asdf:test-system :history-tree)'"
 
-    - name: Validate make-instance symbols
-      shell: bash
-      run: |
-        ros ${{ matrix.rosargs }} -e '(asdf:load-system :nyxt/submodules)'  -e '(asdf:load-system :nyxt)' -e '(push :nyxt-debug-make-instance *features*)' -e '(handler-case (asdf:load-system :nyxt :force t) (error (a) (format t "caught error ~s~%~a~%" a a) (uiop:quit 17)))'
+    - name: Test nhooks
+      env:
+        NASDF_NON_INTERACTIVE_TESTS: true
+      run: nix-shell shell.nix --run "sbcl --eval '(require \"asdf\")' --eval '(asdf:test-system :nhooks)'"
 
-    - name: Keymap type checking
-      shell: bash
-      run: |
-        ros ${{ matrix.rosargs }} -e '(asdf:load-system :nyxt/submodules)'  -e '(asdf:load-system :nyxt)' -e '(push :nyxt-debug-keymap *features*)' -e '(handler-case (asdf:load-system :nyxt :force t) (error (a) (format t "caught error ~s~%~a~%" a a) (uiop:quit 17)))'
+    - name: Test nfiles
+      env:
+        NASDF_NON_INTERACTIVE_TESTS: true
+      run: nix-shell shell.nix --run "sbcl --eval '(require \"asdf\")' --eval '(asdf:test-system :nfiles)'"
+
+    - name: Test nclasses
+      env:
+        NASDF_NON_INTERACTIVE_TESTS: true
+      run: nix-shell shell.nix --run "sbcl --eval '(require \"asdf\")' --eval '(asdf:test-system :nclasses)'"
+
+    - name: Test prompter
+      env:
+        NASDF_NON_INTERACTIVE_TESTS: true
+      run: nix-shell shell.nix --run "sbcl --eval '(require \"asdf\")' --eval '(asdf:test-system :prompter)'"
+
+    - name: Test nkeymaps
+      env:
+        NASDF_NON_INTERACTIVE_TESTS: true
+      run: nix-shell shell.nix --run "sbcl --eval '(require \"asdf\")' --eval '(asdf:test-system :nkeymaps)'"
+
+    - name: Test njson
+      env:
+        NASDF_NON_INTERACTIVE_TESTS: true
+      run: nix-shell shell.nix --run "sbcl --eval '(require \"asdf\")' --eval '(asdf:load-system :njson/cl-json)' --eval '(asdf:test-system :njson)'"
+
+    - name: Test nsymbols
+      env:
+        NASDF_NON_INTERACTIVE_TESTS: true
+      run: nix-shell shell.nix --run "sbcl --eval '(require \"asdf\")' --eval '(asdf:test-system :nsymbols)'"
+
+    - name: Test ndebug
+      env:
+        NASDF_NON_INTERACTIVE_TESTS: true
+      run: nix-shell shell.nix --run "sbcl --eval '(require \"asdf\")' --eval '(asdf:test-system :ndebug)'"

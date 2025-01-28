@@ -1,32 +1,47 @@
 ;;;; SPDX-FileCopyrightText: Atlas Engineer LLC
 ;;;; SPDX-License-Identifier: BSD-3-Clause
 
-(nyxt:define-package :nyxt/input-edit-mode
-    (:documentation "Mode for editing HTML input areas."))
-(in-package :nyxt/input-edit-mode)
+(nyxt:define-package :nyxt/mode/input-edit
+  (:documentation "Mode for editing HTML input areas with convenient keybindings.
 
-;;;; commands for navigating/editing input fields on HTML pages
+In addition to the commands `input-edit-mode' exposes, there are
+several internal utilities for general HTML input editing:
+- Parenscript functions:
+  - `active-input-area-content'.
+  - `set-active-input-area-content'.
+  - `active-input-area-cursor'.
+  - `set-active-input-area-cursor'.
+- Macros `with-text-buffer' and `with-input-area'.
+- Definition macro `define-input-edit-command'.
+
+Several editing commands are based on `move-n-elements' internal
+function."))
+(in-package :nyxt/mode/input-edit)
+
+;;;; Commands for navigating/editing input fields on HTML pages.
 
 (define-parenscript active-input-area-content ()
-  (ps:chain document active-element value))
+  (ps:chain (nyxt/ps:active-element document) value))
 
 (define-parenscript set-active-input-area-content (content)
-  (setf (ps:chain document active-element value) (ps:lisp content)))
+  (setf (ps:chain (nyxt/ps:active-element document) value) (ps:lisp content)))
 
 (define-parenscript active-input-area-cursor ()
-  (ps:chain document active-element selection-start))
+  (ps:chain (nyxt/ps:active-element document) selection-start))
 
-(define-parenscript set-active-input-area-cursor (selection-start
-                                                  selection-end)
-  (ps:chain document active-element (set-selection-range
-                                     (ps:lisp selection-start)
-                                     (ps:lisp selection-end))))
+(define-parenscript set-active-input-area-cursor (selection-start selection-end)
+  (ps:chain (nyxt/ps:active-element document)
+            (set-selection-range
+             (ps:lisp selection-start)
+             (ps:lisp selection-end))))
 
 (export-always 'with-text-buffer)
 (defmacro with-text-buffer ((buffer-name cursor-name
                              &optional initial-contents
-                                       initial-cursor-position)
+                               initial-cursor-position)
                             &body body)
+  "Create a BUFFER-NAME buffer with INITIAL-CONTENTS and CURSOR-NAME at INITIAL-CURSOR-POSITION.
+Run the BODY in the environment with these bound."
   `(let ((,buffer-name (make-instance 'text-buffer:text-buffer))
          (,cursor-name (make-instance 'text-buffer:cursor)))
      (cluffer:attach-cursor ,cursor-name ,buffer-name)
@@ -38,6 +53,7 @@
 
 (export-always 'with-input-area)
 (defmacro with-input-area ((contents cursor-position) &body body)
+  "Bind CONTENTS and CURSOR-POSITION to the ones in the currently focused input field."
   (let ((unprocessed-cursor (gensym)))
     `(let* ((,contents (active-input-area-content))
             (,unprocessed-cursor (active-input-area-cursor))
@@ -129,9 +145,9 @@
                                     (cluffer:cursor-position cursor)))))
 
 (define-mode input-edit-mode ()
-  "Mode for editing input areas in HTML. Overrides many of the
-bindings in other modes, so you will have to disable/enable it as
-necessary."
+  "Mode for editing input areas in HTML.
+Overrides many of the bindings in other modes, so you will have to
+disable/enable it as necessary."
   ((visible-in-status-p nil)
    (rememberable-p nil)
    (keyscheme-map

@@ -1,9 +1,9 @@
 ;;;; SPDX-FileCopyrightText: Atlas Engineer LLC
 ;;;; SPDX-License-Identifier: BSD-3-Clause
 
-(nyxt:define-package :nyxt/small-web-mode
-    (:documentation "Mode for Gopher/Gemini page interaction."))
-(in-package :nyxt/small-web-mode)
+(nyxt:define-package :nyxt/mode/small-web
+  (:documentation "Package for `small-web-mode', which powers Gopher/Gemini page interaction."))
+(in-package :nyxt/mode/small-web)
 
 (define-mode small-web-mode ()
   "Gopher/Gemini page interaction mode.
@@ -29,39 +29,41 @@ loading, you'd need to override `line->html' in the following way:
 \(defmethod line->html ((line cl-gopher:gif)) (image->link line))
 \(defmethod line->html ((line cl-gopher:png)) (image->link line))
 
-Gemini support is a bit more chaotic, but you can override `line->html' for
+Gemini support is a bit more brittle, but you can override `line->html' for
 `phos/gemtext' elements too."
   ((visible-in-status-p nil)
    (url :documentation "The URL being opened.")
    (model :documentation "The contents of the current page.")
    (redirections nil :documentation "The list of redirection Gemini URLs.")
-   (allowed-redirections-count
+   (max-redirections
     5
-    :documentation "The number of redirections that Gemini resources are allowed to make.")
+    :documentation "The maximum number of times a redirection is attempted.")
    (style (theme:themed-css (nyxt::theme *browser*)
             `(body
-              :background-color ,theme:background)
+              :background-color ,theme:background-color)
             `(pre
-              :background-color ,theme:secondary
+              :background-color ,theme:secondary-color
               :padding "2px"
               :margin "0"
               :border-radius 0)
-            `(.button
+            '(.button
               :margin "0 3px 3px 0"
               :font-size "15px")
             `(.search
-              :background-color ,theme:accent
-              :color ,theme:on-accent)
+              :background-color ,theme:action-color
+              :color ,theme:on-action-color)
             `(.error
-              :background-color ,theme:accent
-              :color ,theme:on-accent
+              :background-color ,theme:warning-color
+              :color ,theme:on-warning-color
               :padding "1em 0"))))
   (:toggler-command-p nil))
 
 ;;; Gopher rendering.
 
 (defmethod cl-gopher:display-string :around ((line cl-gopher:gopher-line))
-  (cl-ppcre:regex-replace-all "\\e\\[[\\d;]*[A-Za-z]" (slot-value line 'cl-gopher:display-string) ""))
+  (cl-ppcre:regex-replace-all "\\e\\[[\\d;]*[A-Za-z]"
+                              (slot-value line 'cl-gopher:display-string)
+                              ""))
 
 (export-always 'line->html)
 (defgeneric line->html (line)
@@ -152,9 +154,9 @@ Implies that `small-web-mode' is enabled."))
 (defmethod line->html ((line cl-gopher:unknown)) (file-link->html line))
 
 (defmethod gopher-render ((line cl-gopher:gopher-line))
-  (alex:when-let ((contents (cl-gopher:get-line-contents line))
-                  (spinneret:*html-style* :tree)
-                  (mode (find-submode 'small-web-mode)))
+  (when-let ((contents (cl-gopher:get-line-contents line))
+             (spinneret:*html-style* :tree)
+             (mode (find-submode 'small-web-mode)))
     (setf (model mode) contents)
     (values (spinneret:with-html-string
               (:nstyle (style (current-buffer)))
@@ -187,22 +189,19 @@ Implies that `small-web-mode' is enabled."))
 (defmethod gopher-render ((line cl-gopher:gif)) (render-binary-content line "image/gif"))
 (defmethod gopher-render ((line cl-gopher:png)) (render-binary-content line "image/png"))
 
-;; TODO: :display-isolated-p? Gopher's behavior implies inability to embed it
-;; into pages of the bigger Web, which is exactly what display-isolated means.
 (define-internal-scheme "gopher"
-    (lambda (url buffer)
+    (lambda (url)
       (handler-case
-          (let* ((line (if (uiop:emptyp (quri:uri-path (quri:uri url)))
-                           (buffer-load (str:concat url "/") :buffer buffer)
-                           (cl-gopher:parse-gopher-uri url))))
+          (let ((line (if (uiop:emptyp (quri:uri-path (quri:uri url)))
+                          (buffer-load (str:concat url "/"))
+                          (cl-gopher:parse-gopher-uri url))))
             (if (and (typep line 'cl-gopher:search-line)
                      (uiop:emptyp (cl-gopher:terms line)))
                 (progn (setf (cl-gopher:terms line)
                              (prompt1 :prompt (format nil "Search query for ~a" url)
                                       :sources 'prompter:raw-source))
-                       (buffer-load (cl-gopher:uri-for-gopher-line line) :buffer buffer))
-                (with-current-buffer buffer
-                  (gopher-render line))))
+                       (buffer-load (cl-gopher:uri-for-gopher-line line)))
+                (with-current-buffer (current-buffer) (gopher-render line))))
         (cl-gopher:bad-submenu-error ()
           (error-help (format nil "Malformed line at ~s" url)
                       (format nil "One of the lines on this page has an improper format.
@@ -266,7 +265,7 @@ Please, check URL correctness and try again.")))
     (:br)))
 
 (export-always 'gemtext-render)
-(defun gemtext-render (gemtext buffer)
+(defun gemtext-render (gemtext &optional (buffer (current-buffer)))
   "Renders the Gemtext (Gemini markup format) to HTML.
 
 Implies that `small-web-mode' is enabled."
@@ -279,49 +278,50 @@ Implies that `small-web-mode' is enabled."
               (when mode
                 (:nstyle (style mode)))
               (loop for element in elements
-                    collect (:raw (nyxt/small-web-mode:line->html element))))
+                    collect (:raw (nyxt/mode/small-web:line->html element))))
             "text/html;charset=utf8")))
 
-;; TODO: :secure-p t? Gemini is encrypted, so it can be considered secure.
 (define-internal-scheme "gemini"
-    (lambda (url buffer)
+    (lambda (url)
       (handler-case
           (sera:mvlet* ((status meta body (gemini:request url)))
             (unless (member status '(:redirect :permanent-redirect))
-              (setf (nyxt/small-web-mode:redirections (find-submode 'small-web-mode)) nil))
-            (case status
-              ((:input :sensitive-input)
-               (let ((text (quri:url-encode
-                            (handler-case
-                                (prompt1 :prompt meta
-                                         :sources 'prompter:raw-source
-                                         :invisible-input-p (eq status :sensitive-input))
-                              (nyxt::prompt-buffer-canceled () "")))))
-                 (buffer-load (str:concat url "?" text) :buffer buffer)))
-              (:success
-               (if (str:starts-with-p "text/gemini" meta)
-                   (gemtext-render body buffer)
-                   (values body meta)))
-              ((:redirect :permanent-redirect)
-               (push url (nyxt/small-web-mode:redirections (find-submode 'small-web-mode)))
-               (if (< (length (nyxt/small-web-mode:redirections (find-submode 'small-web-mode)))
-                      (nyxt/small-web-mode:allowed-redirections-count (find-submode 'small-web-mode)))
-                   (buffer-load (quri:merge-uris (quri:uri meta) (quri:uri url)) :buffer buffer)
-                   (error-help
-                    "Error"
-                    (format nil "The server has caused too many (~a+) redirections.~& ~a~{ -> ~a~}"
-                            (nyxt/small-web-mode:allowed-redirections-count (find-submode 'small-web-mode))
-                            (alex:lastcar (nyxt/small-web-mode:redirections (find-submode 'small-web-mode)))
-                            (butlast (nyxt/small-web-mode:redirections (find-submode 'small-web-mode)))))))
-              ((:temporary-failure :server-unavailable :cgi-error :proxy-error
-                :permanent-failure :not-found :gone :proxy-request-refused :bad-request)
-               (error-help "Error" meta))
-              (:slow-down
-               (error-help
-                "Slow down error"
-                (format nil "Try reloading the page in ~a seconds." meta)))
-              ((:client-certificate-required :certificate-not-authorised :certificate-not-valid)
-               (error-help "Certificate error" meta))))
+                (setf (nyxt/mode/small-web:redirections (find-submode 'small-web-mode)) nil))
+              (case status
+                ((:input :sensitive-input)
+                 (let ((text (quri:url-encode
+                              (handler-case
+                                  (prompt1 :prompt meta
+                                           :sources 'prompter:raw-source
+                                           :height :fit-to-prompt
+                                           :invisible-input-p (eq status :sensitive-input))
+                                (prompt-buffer-canceled () "")))))
+                   (buffer-load (str:concat url "?" text))
+                   nil))
+                (:success
+                 (if (str:starts-with-p "text/gemini" meta)
+                     (gemtext-render body)
+                     (values body meta)))
+                ((:redirect :permanent-redirect)
+                 (push url (nyxt/mode/small-web:redirections (find-submode 'small-web-mode)))
+                 (if (< (length (nyxt/mode/small-web:redirections (find-submode 'small-web-mode)))
+                        (nyxt/mode/small-web:max-redirections (find-submode 'small-web-mode)))
+                     (progn (buffer-load (quri:merge-uris (quri:uri meta) (quri:uri url))) nil)
+                     (error-help
+                      "Error"
+                      (format nil "The server has caused too many (~a+) redirections.~& ~a~{ -> ~a~}"
+                              (nyxt/mode/small-web:max-redirections (find-submode 'small-web-mode))
+                              (alex:lastcar (nyxt/mode/small-web:redirections (find-submode 'small-web-mode)))
+                              (butlast (nyxt/mode/small-web:redirections (find-submode 'small-web-mode)))))))
+                ((:temporary-failure :server-unavailable :cgi-error :proxy-error
+                  :permanent-failure :not-found :gone :proxy-request-refused :bad-request)
+                 (error-help "Error" meta))
+                (:slow-down
+                 (error-help
+                  "Slow down error"
+                  (format nil "Try reloading the page in ~a seconds." meta)))
+                ((:client-certificate-required :certificate-not-authorised :certificate-not-valid)
+                 (error-help "Certificate error" meta))))
         (gemini::malformed-response (e)
           (error-help
            "Malformed response"

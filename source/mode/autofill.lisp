@@ -1,16 +1,35 @@
 ;;;; SPDX-FileCopyrightText: Atlas Engineer LLC
 ;;;; SPDX-License-Identifier: BSD-3-Clause
 
-(nyxt:define-package :nyxt/autofill-mode
-    (:documentation "Mode to fill forms more rapidly."))
-(in-package :nyxt/autofill-mode)
+(nyxt:define-package :nyxt/mode/autofill
+  (:documentation "Mode to fill forms more rapidly.
+
+The whole API is centered around `autofill' class and its slots:
+- `name' as the descriptive name of the autofill. Accessed with `autofill-name'.
+- and `fill' as the actual content-designating thing (string or a
+  function). Accessed with `autofill-fill'.
+
+There's a shortcut function to create `autofill's: `make-autofill'.
+
+`autofill' is funcallable. When funcallable, returns the string produced by the
+autofill.
+
+Then, the command eponymously called `autofill' actually fills (with
+`ffi-buffer-paste') the contents into the page.
+
+See the `autofill-mode' for the external user-facing APIs."))
+(in-package :nyxt/mode/autofill)
 
 (export-always 'make-autofill)
 (defun make-autofill (&rest args)
+  "Shortcut to create `autofill's: ARGS are keyword initargs."
   (apply #'make-instance 'autofill args))
 
 (define-mode autofill-mode ()
-  "Mode to fill forms more rapidly."
+  "Mode to fill forms more rapidly.
+
+See `nyxt/mode/autofill' package documentation for implementation details and
+internal programming APIs."
   ((visible-in-status-p nil)
    (rememberable-p t)
    (autofills
@@ -27,6 +46,9 @@ content dynamic to the context.")
       keyscheme:default
       (list
        "C-i" 'autofill)))))
+
+(define-configuration document-buffer
+  ((default-modes (cons 'autofill-mode %slot-value%))))
 
 (define-class autofill ()
   ((name
@@ -50,8 +72,7 @@ it will be in conflict with common-lisp:fill."))
   (:metaclass closer-mop:funcallable-standard-class)
   (:export-class-name-p t)
   (:export-accessor-names-p t)
-  (:export-predicate-name-p t)
-  (:accessor-name-transformer (class*:make-name-transformer name)))
+  (:export-predicate-name-p t))
 
 (defmethod initialize-instance :after ((autofill autofill) &key &allow-other-keys)
   (closer-mop:set-funcallable-instance-function
@@ -62,20 +83,22 @@ it will be in conflict with common-lisp:fill."))
 (define-class autofill-source (prompter:source)
   ((prompter:name "Autofills")
    (prompter:constructor (autofills (find-submode 'autofill-mode)))
-   (prompter:return-actions
+   (prompter:actions-on-return
     (lambda-command autofill* (autofills)
       (ffi-buffer-paste (current-buffer)
                         (funcall (first autofills))))))
   (:export-class-name-p t)
-  (:metaclass user-class))
+  (:metaclass user-class)
+  (:documentation "A source listing all the available `autofill's in the current `autofill-mode'."))
 
 (defmethod prompter:object-attributes ((autofill autofill) (source prompter:source))
   (declare (ignore source))
-  `(("Name" ,(autofill-name autofill))
+  `(("Name" ,(autofill-name autofill) (:width 1))
     ("Fill" ,(let ((f (autofill-fill autofill)))
                (typecase f
                  (string (write-to-string f))
-                 (t "function"))))))
+                 (t "function")))
+            (:width 3))))
 
 (define-command autofill ()
   "Fill in a field with a value from a saved list."

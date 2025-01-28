@@ -1,32 +1,38 @@
 ;;;; SPDX-FileCopyrightText: Atlas Engineer LLC
 ;;;; SPDX-License-Identifier: BSD-3-Clause
 
-(nyxt:define-package :nyxt/history-tree-mode
-    (:documentation "Mode for history-trees."))
-(in-package :nyxt/history-tree-mode)
+(nyxt:define-package :nyxt/mode/history-tree
+  (:documentation "Package for `history-tree-mode', mode for history-trees styling."))
+(in-package :nyxt/mode/history-tree)
 
 (define-mode history-tree-mode ()
-  "Mode for history-tree listing."
+  "Mode for history-tree listing.
+
+Used by pages like `nyxt/mode/history:buffer-history-tree' and
+`nyxt/mode/history:history-tree'."
   ((visible-in-status-p nil)
    (style (theme:themed-css (theme *browser*)
-            `(* :margin 0
-                :padding 0
-                :list-style "none")
+            '(*
+              :margin 0
+              :padding 0
+              :list-style "none")
             `(body
-              :background ,theme:background
-              :color ,theme:on-background
+              :background ,theme:background-color
+              :color ,theme:on-background-color
               :line-height "initial")
+            '("h1"
+              :margin-top "inherit")
             `(".current-buffer a"
-              :color ,theme:on-background)
-            `(".current-buffer a:hover"
+              :color ,theme:on-background-color)
+            '(".current-buffer a:hover"
               :opacity 0.5)
             `(".other-buffer a"
-              :color ,theme:primary)
-            `(".other-buffer a:hover"
+              :color ,theme:primary-color)
+            '(".other-buffer a:hover"
               :opacity 0.5)
-            `(li
+            '(li
               :white-space "nowrap")
-            `("ul li"
+            '("ul li"
               :margin-left "15px"
               :position "relative"
               :padding-left "5px")
@@ -34,22 +40,22 @@
               :content "' '"
               :position "absolute"
               :width "1px"
-              :background-color ,theme:on-background ; is this right??
-              :color ,theme:background
+              :background-color ,theme:on-background-color ; FIXME: Is this right?
+              :color ,theme:background-color
               :top "5px"
               :bottom "-12px"
               :left "-10px")
-            `("body > ul > li:first-child::before"
+            '("body > ul > li:first-child::before"
               :top "12px")
-            `("ul li:not(:first-child):last-child::before"
+            '("ul li:not(:first-child):last-child::before"
               :display "none")
             `("ul li:only-child::before"
               :display "list-item"
               :content "' '"
               :position "absolute"
               :width "1px"
-              :background-color ,theme:on-background ; is this right??
-              :color ,theme:background
+              :background-color ,theme:on-background-color ; FIXME: Is this right?
+              :color ,theme:background-color
               :top "5px"
               :bottom "7px"
               :height "7px"
@@ -60,7 +66,7 @@
               :left "-10px"
               :width "10px"
               :height "1px"
-              :background-color ,theme:on-background ; is this right
-              :color ,theme:background
+              :background-color ,theme:on-background-color ; FIXME: Is this right?
+              :color ,theme:background-color
               :top "12px"))))
   (:toggler-command-p nil))

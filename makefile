@@ -10,12 +10,18 @@ SBCL_FLAGS =
 ifeq ($(LISP), sbcl)
 	SBCL_FLAGS=--dynamic-space-size $(shell sbcl --noinform --no-userinit --non-interactive --eval '(prin1 (max 3072 (/ (sb-ext:dynamic-space-size) 1024 1024)))' --quit | tail -1)
 endif
-## We use --non-interactive with SBCL so that errors don't interrupt the CI.
+
 LISP_FLAGS ?= $(SBCL_FLAGS) --no-userinit --non-interactive
 
-export NYXT_SUBMODULES=true
-export NYXT_RENDERER=gi-gtk
-export NASDF_USE_LOGICAL_PATHS=true
+NYXT_SUBMODULES ?= true
+NYXT_RENDERER ?= gi-gtk
+NASDF_USE_LOGICAL_PATHS ?= true
+NODE_SETUP ?= true
+
+export NYXT_SUBMODULES
+export NYXT_RENDERER
+export NASDF_USE_LOGICAL_PATHS
+export NODE_SETUP
 
 .PHONY: help
 help:
@@ -23,55 +29,39 @@ help:
 
 makefile_dir := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 
-# The CFFI-specific snippet is useful when running in a Guix environment to register its libraries in CFFI.
-# TODO: Find a better way to do it.
+ifeq ($(NYXT_SUBMODULES),true)
+	CL_SOURCE_REGISTRY = $(makefile_dir)_build//
+	export CL_SOURCE_REGISTRY
+endif
+
 lisp_eval:=$(LISP) $(LISP_FLAGS) \
 	--eval '(require "asdf")' \
-	--eval '(when (string= "$(NYXT_SUBMODULES)" "true") (setf asdf:*default-source-registries* (list (quote asdf/source-registry:environment-source-registry))) (asdf:clear-configuration) (asdf:load-asd "$(makefile_dir)/libraries/nasdf/nasdf.asd") (asdf:load-asd "$(makefile_dir)/nyxt.asd") (asdf:load-system :nyxt/submodules))' \
 	--eval '(asdf:load-asd "$(makefile_dir)/libraries/nasdf/nasdf.asd")' \
 	--eval '(asdf:load-asd "$(makefile_dir)/nyxt.asd")' \
-  --eval '(when (find-package :ql) (funcall (read-from-string "ql:quickload") :cffi))' \
-  --eval '(when (and (find-package :cffi) (uiop:getenv "GUIX_ENVIRONMENT")) (pushnew (pathname (format nil "~a/lib/" (uiop:getenv "GUIX_ENVIRONMENT"))) (symbol-value (read-from-string "cffi:*foreign-library-directories*" )) :test (quote equal)))' \
 	--eval
-lisp_quit:=--eval '(uiop:quit)'
+
+lisp_quit:=--eval '(uiop:quit 0 \#+bsd nil)'
 
 ## asdf:load-system is a bit slow on :nyxt/$(NYXT_RENDERER)-application, so we
 ## keep a Make dependency on the Lisp files.
 lisp_files := nyxt.asd $(shell find . -type f -name '*.lisp')
 nyxt: $(lisp_files)
+	if [ "$(NYXT_RENDERER)" = "electron" ] && \
+	   [ "$(NODE_SETUP)" = "true" ] && \
+	   [ "$(NYXT_SUBMODULES)" = "true" ]; then \
+		npm install --verbose $(makefile_dir)_build/cl-electron; \
+	fi
 	$(lisp_eval) '(asdf:load-system :nyxt/$(NYXT_RENDERER)-application)' \
 		--eval '(asdf:make :nyxt/$(NYXT_RENDERER)-application)' \
 		$(lisp_quit) || (printf "\n%s\n%s\n" "Compilation failed, see the above stacktrace." && exit 1)
 
-web-extensions:
-	$(MAKE) -C libraries/web-extensions/ all
-
-.PHONY: app-bundle
-app-bundle:
-	mkdir -p ./Nyxt.app/Contents/MacOS
-	mkdir -p ./Nyxt.app/Contents/Resources
-	mv ./nyxt ./Nyxt.app/Contents/MacOS
-	cp ./assets/Info.plist ./Nyxt.app/Contents
-	cp ./assets/nyxt.icns ./Nyxt.app/Contents/Resources
-
-.PHONY: install-app-bundle
-install-app-bundle:
-	cp -r Nyxt.app $(DESTDIR)/Applications
-
 .PHONY: all
 all: nyxt
-ifeq ($(UNAME), Darwin)
-all: nyxt app-bundle
-endif
 
 .PHONY: install
-ifeq ($(UNAME), Darwin)
-install: install-app-bundle
-else
 install: all
 	$(lisp_eval) '(asdf:load-system :nyxt/$(NYXT_RENDERER)-application)' \
 		--eval '(asdf:make :nyxt/install)' $(lisp_quit)
-endif
 
 .PHONY: doc
 doc:
@@ -80,12 +70,61 @@ doc:
 
 .PHONY: check
 check:
-	$(lisp_eval) '(asdf:load-system :nyxt)' \
-		--eval '(asdf:test-system :nyxt)' $(lisp_quit)
+	$(lisp_eval) '(asdf:test-system :nyxt)'
 
 .PHONY: clean-submodules
 clean-submodules:
-	git submodule deinit  --all
+	git submodule deinit --force --all
 
 .PHONY: clean
 clean: clean-submodules
+	rm -rf build
+
+# Flatpak
+
+FLATPAK_COMMAND = flatpak
+FLATPAK_BUILDER = flatpak-builder
+
+FLATPAK_WEBKITGTK_ID = engineer.atlas.Nyxt-WebKitGTK
+FLATPAK_WEBKITGTK_MANIFEST := $(FLATPAK_WEBKITGTK_ID).yaml
+FLATPAK_WEBKITGTK_EXPORT_REPOSITORY = build/nyxt-webkitgtk-flatpak-repository
+
+.PHONY: flatpak-webkitgtk-build
+flatpak-webkitgtk-build:
+# To start a shell before building add --build-shell=nyxt.
+	@$(FLATPAK_BUILDER) --force-clean --user --install --default-branch=local build $(FLATPAK_WEBKITGTK_MANIFEST)
+
+.PHONY: flatpak-webkitgtk-run
+flatpak-webkitgtk-run:
+	@$(FLATPAK_COMMAND) run --branch=local $(FLATPAK_WEBKITGTK_ID)
+
+.PHONY: flatpak-webkitgtk-repository
+flatpak-webkitgtk-repository:
+	mkdir -p $(FLATPAK_WEBKITGTK_EXPORT_REPOSITORY)
+	@$(FLATPAK_BUILDER) --force-clean --repo=$(FLATPAK_WEBKITGTK_EXPORT_REPOSITORY) build $(FLATPAK_WEBKITGTK_MANIFEST)
+
+.PHONY: flatpak-webkitgtk-bundle
+flatpak-webkitgtk-bundle:
+	@$(FLATPAK_COMMAND) build-bundle $(FLATPAK_WEBKITGTK_EXPORT_REPOSITORY) nyxt-webkitgtk.flatpak $(FLATPAK_WEBKITGTK_ID)
+
+FLATPAK_ELECTRON_ID = engineer.atlas.Nyxt-Electron
+FLATPAK_ELECTRON_MANIFEST := $(FLATPAK_ELECTRON_ID).yaml
+FLATPAK_ELECTRON_EXPORT_REPOSITORY = build/nyxt-electron-flatpak-repository
+
+.PHONY: flatpak-electron-build
+flatpak-electron-build:
+# To start a shell before building add --build-shell=nyxt.
+	@$(FLATPAK_BUILDER) --force-clean --user --install --default-branch=local build $(FLATPAK_ELECTRON_MANIFEST)
+
+.PHONY: flatpak-electron-run
+flatpak-electron-run:
+	@$(FLATPAK_COMMAND) run --branch=local $(FLATPAK_ELECTRON_ID)
+
+.PHONY: flatpak-electron-repository
+flatpak-electron-repository:
+	mkdir -p $(FLATPAK_ELECTRON_EXPORT_REPOSITORY)
+	@$(FLATPAK_BUILDER) --force-clean --repo=$(FLATPAK_ELECTRON_EXPORT_REPOSITORY) build $(FLATPAK_ELECTRON_MANIFEST)
+
+.PHONY: flatpak-electron-bundle
+flatpak-electron-bundle:
+	@$(FLATPAK_COMMAND) build-bundle $(FLATPAK_ELECTRON_EXPORT_REPOSITORY) nyxt-electron.flatpak $(FLATPAK_ELECTRON_ID)

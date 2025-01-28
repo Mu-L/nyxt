@@ -1,11 +1,12 @@
 ;;;; SPDX-FileCopyrightText: Atlas Engineer LLC
 ;;;; SPDX-License-Identifier: BSD-3-Clause
 
-(nyxt:define-package :nyxt/file-manager-mode
-    (:documentation "Mode for file management from the prompt buffer."))
-(in-package :nyxt/file-manager-mode)
+(nyxt:define-package :nyxt/mode/file-manager
+  (:documentation "Package for `file-manager-mode', mode for file management
+from the prompt buffer."))
+(in-package :nyxt/mode/file-manager)
 
-(nyxt/prompt-buffer-mode::define-command-prompt directory-up (prompt-buffer)
+(nyxt/mode/prompt-buffer::define-command-prompt directory-up (prompt-buffer)
   "Remove one level of directory nesting from the current PROMPT-BUFFER file input."
   (let* ((input (prompter:input prompt-buffer))
          (path (uiop:parse-native-namestring input))
@@ -14,10 +15,11 @@
                      (uiop:pathname-directory-pathname path))))
     (nyxt:set-prompt-buffer-input (namestring parent) prompt-buffer)))
 
-(define-mode file-manager-mode (nyxt/prompt-buffer-mode:prompt-buffer-mode)
+(define-mode file-manager-mode (nyxt/mode/prompt-buffer:prompt-buffer-mode)
   "Prompt buffer mode to manage file systems.
-Return actions include deleting, renaming and opening files with external
-programs."
+
+Provides a handful of prompt buffer return actions such as deleting, renaming or
+opening files with external programs."
   ((visible-in-status-p nil)
    (keyscheme-map
     (define-keyscheme-map "file-manager-mode" ()
@@ -29,6 +31,7 @@ programs."
        "C-l" 'directory-up)))))
 
 (export-always 'directory-elements)
+(-> directory-elements (types:pathname-designator) (list-of pathname))
 (defun directory-elements (directory)
   "Return list of all the files and subdirectories inside DIRECTORY."
   (let ((directory (pathname directory)))
@@ -36,7 +39,12 @@ programs."
             (uiop:directory-files directory))))
 
 (export-always 'recursive-directory-elements)
+(-> recursive-directory-elements (types:pathname-designator &key (:include-directories-p boolean))
+    (list-of pathname))
 (defun recursive-directory-elements (directory &key include-directories-p)
+  "Get contents of DIRECTORY and all of its recursive subdirectories.
+When INCLUDE-DIRECTORIES-P, include both directories and files,
+otherwise (default) only include files."
   (loop with included-directories = '()
         with files = (directory-elements directory)
         for directories = (sera:filter #'uiop:directory-pathname-p files)
@@ -62,13 +70,20 @@ programs."
   #+sbcl
   (sb-posix:passwd-gid (sb-posix:getpwnam user))
   #-sbcl
-  (alex:assoc-value (osicat:user-info user) :group-id))
+  (assoc-value (osicat:user-info user) :group-id))
 
 (defun file-group-id (file)
   #+sbcl
   (sb-posix:stat-gid (sb-posix:lstat file))
   #-sbcl
   (osicat-posix:stat-gid (osicat-posix:lstat file)))
+
+(export-always 'mtime)
+(defun mtime (path)
+  #+sbcl
+  (sb-posix:stat-mtime (sb-posix:stat path))
+  #-sbcl
+  (osicat-posix:stat-mtime (osicat-posix:stat path)))
 
 (-> executable-p ((or types:pathname-designator) &key (:user string)) boolean)
 (defun executable-p (file &key (user (current-user)))
@@ -98,21 +113,22 @@ When the user is unspecified, take the current one."
 (define-class program-source (prompter:source)
   ((prompter:name "Programs")
    (prompter:constructor (executables))
-   (prompter:multi-selection-p t))
+   (prompter:enable-marks-p t)
+   (prompter:filter-preprocessor #'prompter:filter-exact-matches))
   (:export-class-name-p t)
   (:export-accessor-names-p t)
-  (:accessor-name-transformer (class*:make-name-transformer name))
   (:documentation "Prompt source for user-accessible programs.")
   (:metaclass user-class))
 
 (defmethod prompter:object-attributes ((path pathname) (source prompter:source))
   (declare (ignore source))
-  `(("Path" ,(uiop:native-namestring path))
+  `(("Path" ,(uiop:native-namestring path) (:width 2))
     ("Name" ,(if (uiop:directory-pathname-p path)
                  (enough-namestring path (files:parent path))
-                 (pathname-name path)))
-    ("Extension" ,(or (files:pathname-type* path) ""))
-    ("Directory" ,(uiop:native-namestring (files:parent path)))))
+                 (pathname-name path))
+            (:width 1))
+    ("Extension" ,(or (files:pathname-type* path) "") (:width 1))
+    ("Directory" ,(uiop:native-namestring (files:parent path)) (:width 3))))
 
 (defun match-extension (ext)
   (lambda (pathname)
@@ -148,7 +164,7 @@ It's suitable for `prompter:filter-preprocessor'."
     '("Name" "Extension" "Directory")
     :accessor nil)
    (prompter:filter-preprocessor (make-file-source-preprocessor))
-   (prompter:multi-selection-p t)
+   (prompter:enable-marks-p t)
    (open-file-in-new-buffer-p
     t
     :documentation "Whether to open files and directories in a new buffer.")
@@ -168,7 +184,19 @@ When nil, all extensions are allow-listed.")
 It takes a pathname and returns a boolean.  For simpler cases, use
 `allow-directories'.")
    (supported-media-types
-    '("xhtml" "html" "mp3" "ogg" "mp4" "flv" "wmv" "webm" "mkv")
+    ;; https://developer.mozilla.org/en-US/docs/Web/Media/Formats/Image_types
+    ;; and https://developer.mozilla.org/en-US/docs/Web/Media/Formats/Containers
+    '("xhtml" "html"
+      ;; Images.
+      "gif" "avif" "jpg" "jpeg" "jfif" "pjpeg" "pjp" "png" "apng" "svg" "webp"
+      ;; Generic container formats.
+      "3gp" "aac" "mpg" "mpeg" "ogg" "mp4" "m4p"
+      ;; Audio.
+      "mp3" "oga" "m4a"
+      ;; Video.
+      "flac" "ogv" "m4v" "flv" "mov" "wmv" "webm" "mkv"
+      ;; Documents
+      "pdf" "txt" "org")
     :type (list-of string)
     :documentation "Media types that Nyxt opens.
 Other formats are opened relying on the OS.")
@@ -186,7 +214,6 @@ Takes the name of the file as the first argument and accepts two keyword argumen
 - :new-buffer-p as to whether the file should be opened in a new buffer."))
   (:export-class-name-p t)
   (:export-accessor-names-p t)
-  (:accessor-name-transformer (class*:make-name-transformer name))
   (:documentation "Prompt source for file(s) on the disk.")
   (:metaclass user-class))
 
@@ -199,59 +226,62 @@ Takes the name of the file as the first argument and accepts two keyword argumen
 See `supported-media-types' of `file-mode'."
   (or (and (uiop:directory-pathname-p filename)
            (uiop:directory-exists-p filename))
-      (sera:and-let* ((extension (pathname-type filename))
-                      (extensions (supported-media-types file-source)))
+      (and-let* ((extension (pathname-type filename))
+                 (extensions (supported-media-types file-source)))
         (find extension extensions :test #'string-equal))))
 
 (define-command-global edit-file-with-external-editor
-    (&optional (files (prompt :input "File(s) to edit"
+    (&optional (files (prompt :prompt "File(s) to edit"
+                              :input (uiop:native-namestring (uiop:getcwd))
+                              :extra-modes 'nyxt/mode/file-manager:file-manager-mode
                               :sources 'file-source)))
   "Edit the FILES using `external-editor-program'.
 If FILES are not provided, prompt for them."
-  (if (external-editor-program *browser*)
-      (progn
-        (echo "Using \"~{~a~^ ~}\" to edit ~s." (external-editor-program *browser*) files)
-        (uiop:launch-program `(,@(external-editor-program *browser*)
-                               ,@(mapcar #'uiop:native-namestring files))))
-      (echo-warning "Please set `external-editor-program' browser slot.")))
+  (echo "Issued \"~{~a~^ ~}\" to edit ~s." (external-editor-program *browser*) files)
+  (with-protect ("Failed editing: ~a. See `external-editor-program' slot." :condition)
+    (uiop:launch-program `(,@(external-editor-program *browser*)
+                           ,@(mapcar #'uiop:native-namestring files)))))
 
 (defmethod initialize-instance :after ((source open-file-source) &key)
-  (setf (slot-value source 'prompter:return-actions)
+  (setf (slot-value source 'prompter:actions-on-return)
         (append
-         (list (lambda-command open-file* (files)
-                 "Open files with `open-file-function' (a sensible default)."
-                 (let* ((new-buffer-p (open-file-in-new-buffer-p source)))
-                   ;; Open first file according to `open-file-in-new-buffer-p'
-                   (funcall (open-file-function source) (first files)
-                            :new-buffer-p new-buffer-p
-                            :supported-p (supported-media-or-directory (first files) source))
-                   ;; Open the rest of the files in new buffers unconditionally.
-                   (dolist (file (rest files))
-                     (funcall (open-file-function source) file
-                              :new-buffer-p t
-                              :supported-p (supported-media-or-directory file source)))))
-               (lambda-command delete-file* (files)
-                 "Deletes the chosen files."
-                 (mapcar #'delete-file files))
-               (lambda-command rename-file* (files)
-                 "Rename the first chosen file."
-                 (let* ((file (first files))
-                        (name (files:basename file)))
-                   (rename-file file (prompt1 :prompt (format nil "New name for ~a" name)
-                                              :sources 'prompter:raw-source
-                                              :input name))))
-               (lambda-command edit-file-with-external-editor* (files)
-                 "Edit files in external editor."
-                 (edit-file-with-external-editor files))
-               ;; TODO: Edit files in Nyxt-internal editor.
-               ;; TODO: File/directory copying.
-               (lambda-command open-with* (files)
-                 "Open files with the selected program."
-                 (let* ((program (prompt1
-                                  :prompt "The program to open the selected files with"
-                                  :sources 'program-source)))
-                   (uiop:launch-program (cons (uiop:native-namestring program) (mapcar #'uiop:native-namestring files))))))
-         (slot-value source 'prompter:return-actions))))
+         (list
+          (lambda-command open-file* (files)
+            "Open files with `open-file-function'."
+            ;; Open first file according to `open-file-in-new-buffer-p'
+            (let ((file (first files)))
+              (funcall (open-file-function source)
+                       file
+                       :new-buffer-p (open-file-in-new-buffer-p source)
+                       :supported-p (supported-media-or-directory file source)))
+            ;; Open the rest of the files in new buffers unconditionally.
+            (dolist (file (rest files))
+              (funcall (open-file-function source)
+                       file
+                       :new-buffer-p t
+                       :supported-p (supported-media-or-directory file source))))
+          (lambda-command delete-file* (files)
+            "Delete files."
+            (mapcar #'delete-file files))
+          (lambda-command rename-file* (files)
+            "Rename the first chosen file."
+            (let* ((file (first files))
+                   (name (files:basename file)))
+              (rename-file file
+                           (prompt1 :prompt (format nil "New name for ~a" name)
+                                    :sources 'prompter:raw-source
+                                    :input name))))
+          (lambda-command edit-file-with-external-editor* (files)
+            "Edit files in external editor."
+            (edit-file-with-external-editor files))
+          ;; TODO: Edit files in Nyxt-internal editor.
+          ;; TODO: File/directory copying.
+          (lambda-command open-with* (files)
+            "Open files with the selected program."
+            (let ((program (prompt1 :prompt "Choose program"
+                                    :sources 'program-source)))
+              (uiop:launch-program (cons (uiop:native-namestring program)
+                                         (mapcar #'uiop:native-namestring files)))))))))
 
 (export-always 'default-open-file-function)
 (defun default-open-file-function (filename &key supported-p new-buffer-p)
@@ -268,14 +298,14 @@ Can be used as a `open-file-function'."
   (handler-case
       (cond
         (supported-p
-         (let ((file-url (quri::make-uri-file :path filename)))
+         (let ((file-url (quri:make-uri-file :path filename)))
            (if new-buffer-p
                (make-buffer-focus :url file-url)
                (buffer-load file-url))))
-        ((not (null *open-program*))
-         (let ((process (uiop:launch-program
-                         (list *open-program* (uiop:native-namestring filename))
-                         :error-output :stream)))
+        (*open-program*
+         (let ((process (uiop:launch-program (list *open-program*
+                                                   (uiop:native-namestring filename))
+                                             :error-output :stream)))
            (nyxt:echo "Opening ~s with ~s." filename *open-program*)
            (run-thread "file opener"
              (let ((status (uiop:wait-process process)))
@@ -296,7 +326,7 @@ Can be used as a `open-file-function'."
                                             *default-pathname-defaults*)))
   "Open a file from the filesystem.
 
-The user is prompted with the prompt-buffer, files are browsable with
+The user is prompted with the prompt buffer, files are browsable with
 fuzzy suggestion.
 
 DEFAULT-DIRECTORY specifies which directory to start from. Defaults to user home

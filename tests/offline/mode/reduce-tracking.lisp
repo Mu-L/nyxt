@@ -3,10 +3,21 @@
 
 (in-package :nyxt/tests)
 
+;; Disable renderer specific methods.
+(defmethod enable :after ((mode nyxt/mode/reduce-tracking:reduce-tracking-mode) &key) nil)
+(defmethod disable :after ((mode nyxt/mode/reduce-tracking:reduce-tracking-mode) &key) nil)
+
 (define-test toggle-reduce-tracking-mode ()
-  (let ((buffer (make-instance 'network-and-modable-buffer)))
+  (let ((buffer (make-instance 'network-and-modable-buffer))
+        (url-pre (quri:uri "https://example.com/query?foo=bar&twclid=1&redirect=https://example.org/foo&s_cid=123"))
+        (url-post (quri:uri "https://example.com/query?foo=bar&redirect=https://example.org/foo")))
     (with-current-buffer buffer
-      (assert-true (enable-modes* 'nyxt/reduce-tracking-mode:reduce-tracking-mode
+      (assert-true (enable-modes* 'nyxt/mode/reduce-tracking:reduce-tracking-mode
                                   buffer))
-      (assert-true (disable-modes* 'nyxt/reduce-tracking-mode:reduce-tracking-mode
+      (assert-equality #'quri:uri=
+                       url-post
+                       (url (nhooks:run-hook (request-resource-hook buffer)
+                                             (make-instance 'request-data
+                                                            :url url-pre))))
+      (assert-true (disable-modes* 'nyxt/mode/reduce-tracking:reduce-tracking-mode
                                    buffer)))))

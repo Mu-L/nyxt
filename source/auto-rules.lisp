@@ -6,8 +6,7 @@
 (define-class auto-rules-file (files:data-file nyxt-lisp-file)
   ((files:base-path #p"auto-rules")
    (files:name "auto-rules"))
-  (:export-class-name-p t)
-  (:accessor-name-transformer (class*:make-name-transformer name)))
+  (:export-class-name-p t))
 
 (defmethod rememberable-p ((mode symbol))
   (check-type mode sym:mode-symbol)
@@ -37,6 +36,7 @@
     (mode (list (name mode)))
     ((cons sym:mode-symbol *) mode)
     (sym:mode-symbol (list mode))
+    (keyword (normalize-mode (resolve-user-symbol mode :mode)))
     (t nil)))
 
 (-> normalize-modes (list) (maybe (cons mode-invocation *)))
@@ -74,10 +74,14 @@
     :documentation "Whether to exclusively enable the `included' modes."))
   (:export-class-name-p t)
   (:export-accessor-names-p t)
-  (:accessor-name-transformer (class*:make-name-transformer name)))
+  (:documentation "A representation of a URL-matching rule.
+- `test' mandates which `request-data' to match.
+- `included' and `excluded' lists of modes to enable/disable (respectively).
+- `exact-p' is whether the `included'/`excluded' are applied exclusively, with
+  all the other modes disabled."))
 
 (defmethod print-object ((rule auto-rule) stream)
-  (print-unreadable-object (rule stream :type t :identity t)
+  (print-unreadable-object (rule stream :type t)
     (princ (sera:ellipsize (format nil "~a" (test rule)) 40) stream)))
 
 (defvar *default-auto-rules* '()
@@ -141,7 +145,7 @@ ARGS as in make-instance of `auto-rule'."
 
 (-> enable-matching-modes (quri:uri modable-buffer) *)
 (defun enable-matching-modes (url buffer)
-  (alex:when-let ((rules (matching-auto-rules url buffer)))
+  (when-let ((rules (matching-auto-rules url buffer)))
     (dolist (rule rules)
       (dolist (mode (set-difference
                      (included rule)
@@ -149,18 +153,19 @@ ARGS as in make-instance of `auto-rule'."
                      :test #'mode=))
         (check-type mode rememberable-mode-invocation)
         (apply #'enable-modes* (first mode) buffer (rest mode)))
-      (alex:when-let ((modes (mapcar #'first
-                                     (if (exact-p rule)
-                                         (set-difference
-                                          (rememberable-of (modes buffer))
-                                          (included rule)
-                                          :test #'mode=)
-                                         (excluded rule)))))
+      (when-let ((modes (mapcar #'first
+                                (if (exact-p rule)
+                                    (set-difference (rememberable-of (modes buffer))
+                                                    (included rule)
+                                                    :test #'mode=)
+                                    (excluded rule)))))
         (disable-modes* modes buffer)))))
 
 (defun can-save-last-active-modes-p (buffer url)
-  (or (null (last-active-modes-url buffer))
-      (not (quri:uri= url (last-active-modes-url buffer)))))
+  (and url
+       (or (null (last-active-modes-url buffer))
+           (not (quri:uri= url (last-active-modes-url buffer)))
+           (not (matching-auto-rules (previous-url buffer) buffer)))))
 
 (defun save-last-active-modes (buffer url)
   (when (can-save-last-active-modes-p buffer url)
@@ -168,15 +173,15 @@ ARGS as in make-instance of `auto-rule'."
           (last-active-modes-url buffer) url)))
 
 (defun reapply-last-active-modes (buffer)
-  (alex:when-let ((modes (mapcar #'first
-                                 (set-difference (normalize-modes (modes buffer))
-                                                 (last-active-modes buffer)
-                                                 :test #'mode=))))
+  (when-let ((modes (mapcar #'first
+                            (set-difference (normalize-modes (modes buffer))
+                                            (last-active-modes buffer)
+                                            :test #'mode=))))
     (disable-modes* modes buffer))
-  (alex:when-let ((modes (mapcar #'first
-                                 (set-difference (last-active-modes buffer)
-                                                 (normalize-modes (modes buffer))
-                                                 :test #'mode=))))
+  (when-let ((modes (mapcar #'first
+                            (set-difference (last-active-modes buffer)
+                                            (normalize-modes (modes buffer))
+                                            :test #'mode=))))
     (enable-modes* modes buffer)))
 
 (-> url-infer-match (url-designator) list)
@@ -205,15 +210,16 @@ The rules are:
 (defun remember-on-mode-toggle (modes buffers &key (enabled-p t))
   (dolist (buffer (uiop:ensure-list buffers))
     (if (prompt-on-mode-toggle-p buffer)
-        (sera:and-let* ((invocations (mapcar #'normalize-mode (uiop:ensure-list modes)))
-                        (invocations (remove-if (rcurry #'mode-covered-by-auto-rules-p buffer enabled-p) invocations)))
-          (if-confirm ((format nil
-                               "Permanently ~:[disable~;enable~] ~{~a~^, ~} for ~a?"
+        (and-let* ((invocations (mapcar #'normalize-mode (uiop:ensure-list modes)))
+                   (invocations (remove-if (rcurry #'mode-covered-by-auto-rules-p
+                                                   buffer
+                                                   enabled-p)
+                                           invocations)))
+          (if-confirm ((format nil "Permanently ~:[disable~;enable~] ~{~a~^, ~} for ~a?"
                                enabled-p (mapcar #'first invocations) (url buffer)))
-              (let ((url (prompt1
-                          :prompt "URL"
-                          :input (render-url (url buffer))
-                          :sources 'prompter:raw-source)))
+              (let ((url (prompt1 :prompt "URL"
+                                  :input (render-url (url buffer))
+                                  :sources 'prompter:raw-source)))
                 (add-modes-to-auto-rules (url-infer-match url)
                                          :append-p t
                                          :include (when enabled-p invocations)
@@ -224,8 +230,7 @@ The rules are:
                                :test #'mode=)
                         (set-difference (last-active-modes buffer) invocations
                                         :test #'mode=)))))
-        (when (not (matching-auto-rules (url buffer) buffer))
-          (save-last-active-modes buffer (url buffer))))))
+        (save-last-active-modes buffer (url buffer)))))
 
 (defmethod enable-modes* :after (modes buffers &rest keys &key remember-p &allow-other-keys)
   (declare (ignorable modes keys))
@@ -264,7 +269,7 @@ Mode is covered if:
   (flet ((invocation-member (list)
            (member mode list :test #'mode=)))
     (or (not (rememberable-p mode))
-        (alex:when-let ((matching-rules (matching-auto-rules (url buffer) buffer)))
+        (when-let ((matching-rules (matching-auto-rules (url buffer) buffer)))
           (or (and enable-p (invocation-member (alex:mappend #'included matching-rules)))
               (and (not enable-p) (invocation-member (alex:mappend #'excluded matching-rules)))))
         ;; Mode is covered by auto-rules only if it is both in
@@ -273,8 +278,8 @@ Mode is covered if:
         (and enable-p (invocation-member (last-active-modes buffer)))
         (and (not enable-p)
              (invocation-member
-              (alex:when-let* ((previous-url (previous-url buffer))
-                               (matching-rules (matching-auto-rules previous-url buffer)))
+              (when-let* ((previous-url (previous-url buffer))
+                          (matching-rules (matching-auto-rules previous-url buffer)))
                 (alex:mappend #'included matching-rules)))))))
 
 (-> apply-auto-rules (quri:uri buffer) *)
@@ -285,38 +290,37 @@ Implies that the request is a top-level one."
   (let* ((rules (matching-auto-rules url buffer))
          (previous-url (previous-url buffer))
          (previous-rules (when previous-url (matching-auto-rules previous-url buffer))))
-    (when (and rules previous-url (not previous-rules))
+    (unless previous-rules
       (save-last-active-modes buffer previous-url))
     (cond
       ((not rules)
        (reapply-last-active-modes buffer))
+      ((and rules previous-rules)
+       (reapply-last-active-modes buffer)
+       (enable-matching-modes url buffer))
       ((and rules (not (eq rules previous-rules)))
        (enable-matching-modes url buffer)))
     (setf (previous-url buffer) url)))
 
 (define-command-global save-non-default-modes-for-future-visits ()
-  "Save the modes present in `default-modes' and not present in current modes as
-:excluded, and modes that are present in mode list but not in `default-modes' as
-:included, to one of the auto-rules. Apply the resulting rule for all the future
-visits to this URL, inferring the matching condition with `url-infer-match'.
+  "Save the enabled non-default modes for future visits.
+
+The matching URL logic is dictacted by `url-infer-match'.
 
 This command does not save non-rememberable modes. If you want auto-rules to
 remember a particular mode, configure it to be `rememberable-p' in your
 configuration file.
 
 For the storage format see the comment in the header of your `auto-rules-file'."
-  (let ((url (prompt1
-              :prompt "URL"
-              :input (render-url (url (current-buffer)))
-              :sources (list
-                        (make-instance 'prompter:raw-source
-                                       :name "New URL")
-                        (make-instance 'global-history-source
-                                       :return-actions #'identity)))))
+  (let ((url (prompt1 :prompt "URL"
+                      :input (render-url (url (current-buffer)))
+                      :sources (list (make-instance 'prompter:raw-source
+                                                    :name "New URL")
+                                     (make-instance 'global-history-source
+                                                    :actions-on-return #'identity)))))
     (when (typep url 'nyxt::history-entry)
       (setf url (url url)))
-    (add-modes-to-auto-rules
-     (url-infer-match url)
+    (add-modes-to-auto-rules (url-infer-match url)
      :include (set-difference (normalize-modes (modes (current-buffer)))
                               (normalize-modes (default-modes (current-buffer)))
                               :test #'mode=)
@@ -325,10 +329,9 @@ For the storage format see the comment in the header of your `auto-rules-file'."
                               :test #'mode=))))
 
 (define-command-global save-exact-modes-for-future-visits ()
-  "Store the exact list of enabled modes to auto-rules for all the future visits
-of this domain/host/URL/group of websites inferring the suitable matching
-condition by user input.
-Uses `url-infer-match', see its documentation for matching rules.
+  "Save the enabled modes for future visits.
+
+The matching URL logic is dictacted by `url-infer-match'.
 
 This command does not save non-rememberable modes. If you want auto-rules to
 save a particular mode, configure it to be `rememberable-p' in your
@@ -337,14 +340,12 @@ configuration file.
 For the storage format see the comment in the header of your `auto-rules-file'."
   ;; TODO: Should it prompt for modes to save?
   ;; One may want to adjust the modes before persisting them as :exact-p rule.
-  (let ((url (prompt1
-              :prompt "URL"
-              :input (render-url (url (current-buffer)))
-              :sources (list
-                        (make-instance 'prompter:raw-source
-                                       :name "New URL")
-                        (make-instance 'global-history-source
-                                       :return-actions #'identity)))))
+  (let ((url (prompt1 :prompt "URL"
+                      :input (render-url (url (current-buffer)))
+                      :sources (list (make-instance 'prompter:raw-source
+                                                    :name "New URL")
+                                     (make-instance 'global-history-source
+                                                    :actions-on-return #'identity)))))
     (setf url (url url))
     (add-modes-to-auto-rules (url-infer-match url)
                              :include (rememberable-of (modes (current-buffer)))
@@ -360,6 +361,11 @@ For the storage format see the comment in the header of your `auto-rules-file'."
     (values list &optional))
 (export-always 'add-modes-to-auto-rules)
 (defun add-modes-to-auto-rules (test &key (buffer (nyxt:current-buffer)) (append-p nil) exclude include (exact-p nil))
+  "Add a rule with TEST, EXCLUDE, INCLUDE, EXACT-P to the set of rules in BUFFER.
+Adds it to browser-global rules file by default.
+If there's an existing rule:
+- And APPEND-P is non-nil: add the modes to the rule.
+- And replace the rule otherwise."
   (files:with-file-content (rules (auto-rules-file buffer))
     (let* ((rule (or (find test rules
                            :key #'test :test #'equal)

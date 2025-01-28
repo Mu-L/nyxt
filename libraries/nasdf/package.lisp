@@ -7,46 +7,8 @@
     (sb-ext:unlock-package :nasdf)))
 
 (uiop:define-package :nasdf
-  (:use :cl)
-  (:import-from :uiop
-                #:absolute-pathname-p
-                #:collect-sub*directories
-                #:copy-file
-                #:directory-files
-                #:ensure-all-directories-exist
-                #:ensure-directory-pathname
-                #:ensure-pathname
-                #:file-exists-p
-                #:getenv
-                #:inter-directory-separator
-                #:merge-pathnames*
-                #:native-namestring
-                #:quit
-                #:relativize-pathname-directory
-                #:run-program
-                #:split-string
-                #:strcat
-                #:subpathp
-                #:symbol-call)
-  (:import-from :asdf
-                #:clear-configuration
-                #:perform
-                #:system-relative-pathname
-                #:system-source-directory)
+  (:use #:cl #:uiop #:asdf)
   (:documentation "ASDF helpers for system setup, testing and installation.
-
-To tell ASDF to fail loading a system on warnings, add this line to the system
-definition:
-
-  :around-compile \"NASDF:FAIL-ON-WARNINGS\"
-
-To report unbound exported symbols:
-
-(defsystem my-system
-  :defsystem-depends-on (\"nasdf\")
-  :class :nasdf-compilation-test-system
-  :depends-on (foo bar)
-  :packages (:foo))
 
 A system that installs files:
 
@@ -65,20 +27,14 @@ A system that installs files:
                 :exclude-types (\"o\" \"c\" \"h\" ; C code and artifacts.
                                     \"fasl\"))))
 
-A system that fetches the Git submodules:
+A test system:
 
-(defsystem \"my-project/submodules\"
+(defsystem \"my-project/tests\"
   :defsystem-depends-on (\"nasdf\")
-  :class :nasdf-submodule-system)
-
-Shell command to add a submodule to the default directory:
-
-    git submodule add https://github.com/atlas-engineer/history-tree _build/history-tree
-
-To update it:
-
-    git submodule update --remote _build/history-tree
-"))
+  :class :nasdf-test-system
+  :depends-on (alexandria lisp-unit2)
+  :components ((:file \"tests\"))
+  :test-suite-args (:package :my-project/tests))"))
 
 #+sb-package-locks
 (sb-ext:lock-package :nasdf)

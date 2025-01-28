@@ -12,8 +12,6 @@
 (uiop:define-package :nyxt
   (:use :cl)
   (:use-reexport :nyxt/utilities :nyxt/types)
-  #+nyxt-debug-make-instance
-  (:shadow #:make-instance)
   (:export #:use-nyxt-package-nicknames)
   (:documentation "The core package of Nyxt, the infinitely extensible browser.
 
@@ -25,11 +23,12 @@ modes, commands, etc."))
 (sb-ext:lock-package :nyxt)
 
 (in-package :nyxt)
-(defvar *imports* '((:alexandria #:compose #:curry #:mappend #:rcurry)
+(defvar *imports* '((:alexandria #:compose #:curry #:mappend #:rcurry
+                     #:if-let #:when-let #:when-let*
+                     #:assoc-value)
                     (:trivia #:match #:multiple-value-match #:lambda-match #:guard)
                     (:nkeymaps #:define-key #:define-keyscheme-map)
-                    (:class-star #:define-class)
-                    (:serapeum #:export-always #:->))
+                    (:serapeum #:export-always #:-> #:and-let*))
   "Default list of symbol imports used by `nyxt:define-package'.")
 
 (loop :for (package . symbols) in *imports*
@@ -44,7 +43,6 @@ modes, commands, etc."))
           (:time :local-time)
           (:types :trivial-types)
           (:lpara :lparallel)
-          (:class* :hu.dwim.defclass-star)
           (:hooks :nhooks)
           (:files :nfiles)
           (:j :njson/aliases)
@@ -53,6 +51,8 @@ modes, commands, etc."))
         :do (trivial-package-local-nicknames:add-package-local-nickname nickname package :nyxt)))
 
 (defmacro nyxt::use-nyxt-package-nicknames (&optional (package *package*))
+  "Define package nicknames in PACKAGE for Nyxt-used libraries.
+Effectively makes programming in PACKAGE same as programming in `:nyxt'."
   `(eval-when (:compile-toplevel :load-toplevel :execute)
      (let ((*package* (find-package ,package)))
        (dolist (pkgs (trivial-package-local-nicknames:package-local-nicknames :nyxt))
@@ -60,14 +60,29 @@ modes, commands, etc."))
                                                                      (find-package ,package))))))
 
 (defmacro without-package-locks (&body body)
+  "Ignore package locks for the duration of the BODY.
+Same as `progn' on implementations that don't have package locks."
   #+sb-package-locks
   `(sb-ext:without-package-locks
      ,@body)
-  #-sb-package-locks
+  #+(and ecl package-locks)
+  `(ext:without-package-locks
+     ,@body)
+  #-(or sb-package-locks package-locks)
   `(progn ,@body))
 
+(serapeum:export-always 'define-class :nyxt)
+(defmacro define-class (name supers slots &rest options)
+  "`nclasses:define-class' with automatic types and always-dashed predicates."
+  `(nclasses:define-class ,name ,supers ,slots
+     ,@(append
+        '((:automatic-types-p t)
+          (:accessor-name-package :slot-name)
+          (:predicate-name-transformer 'nclasses:always-dashed-predicate-name-transformer))
+       options)))
+
 (serapeum:export-always 'define-package :nyxt)
-(defmacro define-package (name &rest options)
+(defmacro define-package (name &body options)
   "A helper around `uiop:define-package'.
 `:cl' and `:nyxt' are automatically used.
 `nyxt::*imports*' are automatically imported."
@@ -92,21 +107,9 @@ modes, commands, etc."))
 (deftype class-symbol ()
   `(and symbol (satisfies find-class)))
 
-#+nyxt-debug-make-instance
-(serapeum:-> make-instance (class-symbol &rest t) t)
-#+nyxt-debug-make-instance
-(defun make-instance (sym &rest args)
-  "This wrapper of `make-instance' can be used from a test suite to check if all
-calls are made on valid classes.
-
-The check seems to only work on CCL, but not even everywhere, for instance slot
-initforms may not be caught."
-  (apply #'cl:make-instance sym args))
-
 (uiop:define-package :nyxt-user
   (:use :cl :nyxt :nyxt/utilities)
   (:import-from :nkeymaps #:define-key #:define-keyscheme-map)
-  (:import-from :class-star #:define-class)
   (:documentation "Package left for the user to fiddle with.  If the
 configuration file package is left unspecified, it defaults to this.  It's not
 recommended to use `nyxt' itself to avoid clobbering internal symbols.

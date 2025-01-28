@@ -13,26 +13,27 @@
 This is useful when the browser is run from a REPL so that quitting does not
 close the connection.")
 
-(export-always '*debug-on-error*)
-(defvar *debug-on-error* nil
-  "Whether the Nyxt-internal debugger pops up when an error happens.
-Allows the user to fix immediate errors in runtime, given enough understanding.")
-
 (defvar *restart-on-error* nil
   "Control variable to enable accurate error reporting during startup.
 Implementation detail.
-For user-facing controls, see `*run-from-repl-p*' and `*debug-on-error*'.")
+For user-facing controls, see `*run-from-repl-p*'.")
 
 (export-always '*open-program*)
 (declaim (type (or string null) *open-program*))
 (defvar *open-program*
   #+darwin "open"
-  #+(or linux bsd) "xdg-open"
-  #-(or linux bsd darwin) nil)
+  #+(and (or linux bsd) (not darwin)) "xdg-open"
+  #-(or linux bsd darwin) nil
+  "The program to open unsupported files with.")
 
+(export-always '*headless-p*)
 (defvar *headless-p* nil
   "If non-nil, don't display anything.
 This is convenient for testing purposes or to drive Nyxt programmatically.")
+
+(export-always '*quitting-nyxt-p*)
+(defvar *quitting-nyxt-p* nil
+  "When non-nil, Nyxt is quitting.")
 
 (export-always '*browser*)
 (defvar *browser* nil
@@ -43,11 +44,6 @@ It can be initialized with
 
 It's possible to run multiple interfaces of Nyxt at the same time.  You can
 let-bind *browser* to temporarily switch interface.")
-
-(defvar *interactive-p* nil
-  "When non-nil, allow prompt buffers during BODY execution.
-This is useful to spot potential blocks when non-interactive code (for instance
-scripts) tries to invoke the prompt buffer.")
 
 (export-always '*swank-port*)
 (defvar *swank-port* 4006
@@ -61,94 +57,64 @@ is 4005, default set to 4006 in Nyxt to avoid collisions).")
 
 (declaim (type (maybe renderer) *renderer*))
 (defparameter *renderer* nil
+  ;; TODO: Switching renderer does not seem to work anymore.
+  ;; Maybe issue at the library level?
   "The renderer used by Nyxt.
-It can be changed between two runs of Nyxt when run from a Lisp REPL.")
+It can be changed between two runs of Nyxt when run from a Lisp REPL.
+Example:
 
-(alex:define-constant +nyxt-critical-dependencies+
-    '(:cl-cffi-gtk
-      :cl-gobject-introspection
-      :cl-webkit2)
-  :test #'equal)
-
-(defvar +asdf-build-information+
-  `(:version ,(asdf:asdf-version)
-    :critical-dependencies ,(mapcar (lambda (s)
-                                      (nth-value 2 (asdf:locate-system s)))
-                                    +nyxt-critical-dependencies+))
-  "Build-time ASDF information.
-Don't set this, it would lose its meaning.")
-
-(defvar +guix-build-information+
-  (when (sera:resolve-executable "guix")
-    `(:version
-      ;; `guix describe' is not reliable within `guix environment'.
-      ,(fourth (sera:tokens
-                (first (sera:lines
-                        (uiop:run-program '("guix" "--version") :output :string)))))))
-  "Build-time Guix information.
-Don't set this, it would lose its meaning.")
-
-(defvar +quicklisp-build-information+
-  #+quicklisp
-  `(:dist-version ,(ql:dist-version "quicklisp")
-    :client-version ,(ql:client-version)
-    :local-project-directories ,ql:*local-project-directories*
-    :critical-dependencies ,(mapcar #'ql-dist:find-system +nyxt-critical-dependencies+))
-  #-quicklisp
-  nil
-  "Build-time Quicklisp information.
-Don't set this, it would lose its meaning.")
+  (nyxt:quit)
+  (setf nyxt::*renderer* (make-instance 'nyxt/renderer/gtk:gtk-renderer))
+  (nyxt:start)")
 
 (export-always '+version+)
 (alex:define-constant +version+
-    (or (uiop:getenv "NYXT_VERSION")      ; This is useful for build systems without Git.
-        (ignore-errors
-         (uiop:with-current-directory ((asdf:system-source-directory :nyxt))
-           (uiop:run-program (list "git" "describe" "--always" "--tags")
-                             :output '(:string :stripped t))))
+    (or (uiop:getenv "NYXT_VERSION")
         (asdf/component:component-version (asdf:find-system :nyxt)))
-  :test #'equal)
+  :test #'equal
+  :documentation "Nyxt version.
+Can be overridden via NYXT_VERSION environment variable.")
+
+(defun parse-version (version)
+  "Helper to parse VERSION as a string.
+
+Return NIL on error.
+Return major version as an integer on pre-releases.
+Otherwise, return 3 values:
+- major version as an integer,
+- minor version as an integer,
+- patch version as an integer."
+  (ignore-errors
+   (if (search "pre-release" version)
+       (first (sera:words version))
+       (destructuring-bind (&optional major minor patch) (uiop:parse-version version)
+         (values major minor patch)))))
 
 (defun version ()
-  "Return 5 values:
-- MAJOR version as integer,
-- MINOR version as integer,
-- PATCH version as integer,
-- COMMITS as number of commits from the last release,
-- and current COMMIT as string.
-Return nil on error."
-  (ignore-errors
-   ;; Pre-releases are falling outside the conventional version values.
-   (if (search "pre-release" +version+)
-       (parse-integer (first (str:split "-" +version+)))
-       (destructuring-bind (version &optional commits commit)
-           (str:split "-" +version+)
-         (let* ((integer-commits-p (and commits (every #'digit-char-p commits)))
-                (commits-number (if integer-commits-p
-                                    (parse-integer commits)
-                                    0))
-                (commit (if integer-commits-p
-                            commit
-                            commits)))
-           (destructuring-bind (&optional major minor patch)
-               (uiop:parse-version version)
-             (values major minor patch commit commits-number)))))))
+  "Get the version of Nyxt parsed as multiple values.
+See `parse-version' for details on the returned values."
+  (parse-version +version+))
 
-(multiple-value-bind (major minor patch commit commits)
-    (version)
+(multiple-value-bind (major minor patch) (version)
   (flet ((push-feature (string)
-           (pushnew (intern (uiop:strcat "NYXT-" (string-upcase (princ-to-string string))) "KEYWORD") *features*)))
-    (when +version+
-      (push-feature +version+))
-    (when (search "pre-release" +version+)
-      (push-feature (str:join "-" (subseq (str:split "-" +version+) 0 4))))
-    (when major
-      (push-feature major))
-    (when minor
-      (push-feature (format nil "~a.~a" major minor)))
-    (when patch
-      (push-feature (format nil "~a.~a.~a" major minor patch)))
-    (when commit
-      (push-feature (string-upcase commit)))
-    (when (and commits (not (zerop commits)))
-      (push-feature "UNSTABLE"))))
+           (pushnew (intern (uiop:strcat "NYXT-"
+                                         (string-upcase (princ-to-string string)))
+                            "KEYWORD")
+                    *features*)))
+    (when +version+ (push-feature +version+))
+    (when major (push-feature major))
+    (when minor (push-feature (format nil "~a.~a" major minor)))
+    (when patch (push-feature (format nil "~a.~a.~a" major minor patch)))))
+
+(export-always '*static-data*)
+(defvar *static-data* (make-hash-table :test 'equal)
+  "Static data for usage in Nyxt.")
+
+(defun load-assets (subdirectory read-function)
+  (mapcar (lambda (i)
+            (setf (gethash (file-namestring i) *static-data*)
+                  (funcall read-function i)))
+          (uiop:directory-files (asdf:system-relative-pathname :nyxt (format nil "assets/~a/" subdirectory)))))
+
+(load-assets "fonts" #'alex:read-file-into-byte-vector)
+(load-assets "glyphs" #'alex:read-file-into-string)

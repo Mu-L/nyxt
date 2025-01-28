@@ -3,27 +3,17 @@
 
 (in-package :nyxt)
 
-;; We define our own 'default profile' (instead of using `files:profile'
-;; directly) so that we can specialize the methods
 (define-class nyxt-profile (files:profile)
   ((files:name "nyxt"))
   (:export-class-name-p t)
   (:export-accessor-names-p t)
-  (:accessor-name-transformer (class*:make-name-transformer name))
   (:documentation "With the default profile all data is persisted to the
 standard locations."))
 
-(export-always 'global-profile)
-(defun global-profile ()
-  "The profile to use in the absence of buffers and on browser-less variables."
-  (or
-   (when *browser* (profile *browser*))
-   (alex:when-let ((profile-class (find-profile-class (getf *options* :profile))))
-     (make-instance profile-class))
-   (make-instance 'nyxt-profile)))
+(defvar *nyxt-profile* (make-instance 'nyxt-profile))
 
 (define-class nyxt-file (files:gpg-file)
-  ((files:profile (global-profile))
+  ((files:profile *nyxt-profile*)
    (files:on-external-modification 'files:reload)
    (editable-p
     t
@@ -32,7 +22,6 @@ standard locations."))
 It's not always the case, take the socket for instance."))
   (:export-class-name-p t)
   (:export-accessor-names-p t)
-  (:accessor-name-transformer (class*:make-name-transformer name))
   (:documentation "All Nyxt files.
 By default, a file that fails to be loaded is automatically backed up.
 If the file is modified externally, Nyxt automatically reloads it."))
@@ -40,7 +29,6 @@ If the file is modified externally, Nyxt automatically reloads it."))
 (define-class nyxt-remote-file (nyxt-file files:remote-file)
   ()
   (:export-class-name-p t)
-  (:accessor-name-transformer (class*:make-name-transformer name))
   (:documentation "A `files:remote-file' with specialized methods."))
 
 (defmethod files:fetch ((profile nyxt-profile) (file nyxt-remote-file) &key)
@@ -49,12 +37,12 @@ If the file is modified externally, Nyxt automatically reloads it."))
 (define-class nyxt-data-directory (files:data-file nyxt-file)
   ((files:base-path #p""))
   (:export-class-name-p t)
-  (:accessor-name-transformer (class*:make-name-transformer name)))
+  (:documentation "Directory for Nyxt data (history, bookmarks etc.) files."))
 
 (define-class nyxt-temporary-directory (files:data-file nyxt-file)
   ((files:base-path #p""))
   (:export-class-name-p t)
-  (:accessor-name-transformer (class*:make-name-transformer name)))
+  (:documentation "File for a /tmp/`profile'-name/ directory."))
 
 (defmethod files:resolve ((profile nyxt-profile) (path nyxt-temporary-directory))
   "Expand all data paths inside a temporary directory."
@@ -66,42 +54,11 @@ If the file is modified externally, Nyxt automatically reloads it."))
   ()
   (:export-class-name-p t)
   (:export-accessor-names-p t)
-  (:accessor-name-transformer (class*:make-name-transformer name))
   (:documentation "Nyxt Lisp files."))
 
-(define-class nosave-profile (files:read-only-profile nyxt-profile)
-  ()
-  (:export-class-name-p t)
-  (:export-accessor-names-p t)
-  (:accessor-name-transformer (class*:make-name-transformer name))
-  (:documentation "With the nosave profile no data should be persisted to disk.
-No data should be shared with other nosave buffers either."))
-
-(define-class nofile-profile (files:virtual-profile nyxt-profile)
-  ()
-  (:export-class-name-p t)
-  (:export-accessor-names-p t)
-  (:accessor-name-transformer (class*:make-name-transformer name))
-  (:documentation "Data is neither read nor persisted persisted to disk."))
-
-(defun find-file-name-path (ref)
-  "Return the value of the REF found in `*options*'s `:with-file'.
-An empty path can be used to disable file persistence for the referenced `nyxt-file'.
-
-Example: when passed command line option --with-file foo=bar,
-\(find-file-name-path \"foo\") returns \"bar\"."
-  (unless (uiop:emptyp ref)
-    (uiop:ensure-pathname
-     (second
-      (assoc ref
-             (loop for (opt value . nil) on *options*
-                   when (eq opt :with-file)
-                     collect value)
-             :test #'string=)))))
-
 (defmethod files:resolve ((profile files:profile) (file nyxt-file))
-  (or (find-file-name-path (files:name file))
-      (sera:path-join (uiop:ensure-directory-pathname (files:name profile)) (call-next-method))))
+  (sera:path-join (uiop:ensure-directory-pathname (files:name profile))
+                  (call-next-method)))
 
 (defmethod files:read-file :around ((profile nyxt-profile) (file nyxt-file) &key)
   (unless (typep file 'files:virtual-file)
@@ -142,29 +99,34 @@ Example: when passed command line option --with-file foo=bar,
     (s-serialization:deserialize-sexp raw-content)))
 
 (defmethod prompter:object-attributes ((file files:file) (source prompter:source))
-  `(("Path" ,(uiop:native-namestring (files:expand file)))      ; TODO: Trim if too long?
+  `(("Path" ,(uiop:native-namestring (files:expand file)) (:width 3))
     ("Exists?" ,(if (uiop:file-exists-p (uiop:ensure-pathname (files:expand file)))
                     "yes"
-                    "no"))
-    ("Type" ,(string (sera:class-name-of file)))
-    ("Name" ,(files:name file))))
+                    "no")
+               (:width 1))
+    ("Type" ,(string (sera:class-name-of file)) (:width 1))
+    ("Name" ,(files:name file) (:width 2))))
 
 (define-class user-file-source (prompter:source)
   ((prompter:name "User files")
-   (prompter:active-attributes-keys '("Path" "Exists?" "Type" "Name"))
+   (prompter:active-attributes-keys
+    '("Path" "Exists?" "Type" "Name")
+    :accessor nil)
    (prompter:constructor (let ((path-map (make-hash-table :test 'equal)))
                            (dolist (file (files:all-files))
-                             (sera:and-let* ((nyxt-file-p file)
-                                             (editable? (editable-p file))
-                                             (full-path (files:expand file)))
+                             (and-let* ((nyxt-file-p file)
+                                        (editable? (editable-p file))
+                                        (full-path (files:expand file)))
                                (when (and (funcall (alex:disjoin #'nyxt-subpackage-p #'nyxt-user-subpackage-p)
                                                    (symbol-package (sera:class-name-of file)))
                                           (not (uiop:directory-pathname-p full-path)))
                                  (setf (gethash full-path path-map) file))))
-                           (alexandria:hash-table-values path-map)))))
+                           (alex:hash-table-values path-map)))))
 
 (export-always 'xdg-download-dir)
 (defun xdg-download-dir ()
+  "Get the directory for user downloads.
+Tries hard to find the XDG directory or at least ~/Downloads one."
   (let ((dir (ignore-errors (uiop:run-program '("xdg-user-dir" "DOWNLOAD")
                                               :output '(:string :stripped t)))))
     (when (or (null dir) (uiop:pathname-equal dir (user-homedir-pathname)))
@@ -176,23 +138,4 @@ Example: when passed command line option --with-file foo=bar,
 (define-class download-directory (nyxt-file)
   ((files:base-path (xdg-download-dir))
    (files:name "downloads"))
-  (:export-class-name-p t)
-  (:accessor-name-transformer (class*:make-name-transformer name)))
-
-(export-always 'profile-name)
-(defun profile-name (profile-class)
-  (string-downcase
-   (sera:drop-suffix "-PROFILE" (symbol-name (class-name profile-class)))))
-
-(export-always 'list-profile-classes)
-(defun list-profile-classes ()
-  (cons (find-class 'nyxt:nyxt-profile)
-        (mopu:subclasses 'nyxt:nyxt-profile)))
-
-(export-always 'find-profile-class)
-(defun find-profile-class (name)
-  "Return the `nyxt:nyxt-profile' subclass whose name is NAME-profile."
-  (find (string-downcase name)
-        (list-profile-classes)
-        :test 'string=
-        :key 'profile-name))
+  (:export-class-name-p t))

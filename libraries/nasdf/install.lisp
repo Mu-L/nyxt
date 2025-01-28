@@ -4,7 +4,7 @@
 (in-package :nasdf)
 
 (export-always 'nasdf-file)
-(defclass nasdf-file (asdf:static-file)
+(defclass nasdf-file (static-file)
   ((if-does-not-exist
     :initform :error
     :initarg :if-does-not-exist
@@ -30,11 +30,21 @@
   (:documentation "Component type for XDG .desktop files to install."))
 (import 'nasdf-desktop-file :asdf-user)
 
+(export-always 'nasdf-appdata-file)
+(defclass nasdf-appdata-file (nasdf-file) ()
+  (:documentation "Component type for Appdata files to install."))
+(import 'nasdf-appdata-file :asdf-user)
+
+(export-always 'nasdf-icon-scalable-file)
+(defclass nasdf-icon-scalable-file (nasdf-file) ()
+  (:documentation "Component type for the SVG icon."))
+(import 'nasdf-icon-scalable-file :asdf-user)
+
 (export-always 'nasdf-icon-directory)
 (defclass nasdf-icon-directory (nasdf-file)
   ((asdf/interface::type :initform "png")) ; TODO: Is there a standard way to access the type?
   (:documentation "Component type for directory containing icon files to install.
-File ot type `type' are looked for.
+File of type `type' are looked for.
 The last number found in the file name is used to install the icon in the right directory."))
 (import 'nasdf-icon-directory :asdf-user)
 
@@ -69,10 +79,10 @@ Destination directory is given by the `dest-source-dir' generic function."))
 (import 'nasdf-source-directory :asdf-user)
 
 (defun nil-pathname-p (pathname)
-  "Return non-nil if PATHNAME is `uiop:*nil-pathname*' or nil."
+  "Return non-nil if PATHNAME is `*nil-pathname*' or nil."
   (the (values boolean &optional)
        (or (null pathname)
-           (uiop:pathname-equal pathname uiop:*nil-pathname*))))
+           (pathname-equal pathname *nil-pathname*))))
 
 (defun basename (pathname)              ; From nfiles.
   "Return the basename, that is:
@@ -84,8 +94,8 @@ Destination directory is given by the `dest-source-dir' generic function."))
       (first (last (pathname-directory
                     ;; Ensure directory _after_ truenamizing, otherwise if
                     ;; non-directory file exists it may not yield a directory.
-                    (uiop:ensure-directory-pathname
-                     (uiop:ensure-pathname pathname :truenamize t)))))))
+                    (ensure-directory-pathname
+                     (ensure-pathname pathname :truenamize t)))))))
 
 (defun path-from-env (environment-variable default)
   (let ((env (getenv environment-variable)))
@@ -115,16 +125,23 @@ Destination directory is given by the `dest-source-dir' generic function."))
 (defparameter *bindir* (path-from-env "BINDIR" (merge-pathnames* "bin/" *prefix*)))
 (export-always '*libdir*)
 (defparameter *libdir* (path-from-env "LIBDIR" (merge-pathnames* "lib/" *prefix*)))
+
 (export-always 'libdir)
 (defmethod libdir ((component nasdf-library-file))
-  *libdir*)
+  (let ((name (primary-system-name (component-system component))))
+    (ensure-directory-pathname (merge-pathnames* name *libdir*))))
 
 (export-always '*dest-source-dir*)
-(defvar *dest-source-dir* (path-from-env "NASDF_SOURCE_PATH" *datadir*))
+(defvar *dest-source-dir* (path-from-env "NASDF_SOURCE_PATH" *datadir*)
+  "Root of where the source will be installed.
+Final path is resolved in `dest-source-dir'.")
 
 (export-always 'dest-source-dir)
 (defmethod dest-source-dir ((component nasdf-source-directory))
-  *dest-source-dir*)
+  "The directory into which the source is installed."
+  (let ((name (primary-system-name (component-system component))))
+    (ensure-directory-pathname
+     (merge-pathnames* name *dest-source-dir*))))
 
 (export-always '*chmod-program*)
 (defvar *chmod-program* "chmod")
@@ -145,9 +162,9 @@ Destination directory is given by the `dest-source-dir' generic function."))
    (list (directory-namestring dest)))
   (copy-file file dest))
 
-(defmethod asdf:perform ((op asdf:compile-op) (c nasdf-file)) ; REVIEW: load-op?
-  (loop for input in (asdf:input-files op c)
-        for output in (asdf:output-files op c)
+(defmethod perform ((op compile-op) (c nasdf-file)) ; REVIEW: load-op?
+  (loop for input in (input-files op c)
+        for output in (output-files op c)
         do (if (or (file-exists-p input)
                    (slot-value c 'if-does-not-exist))
                (progn
@@ -157,31 +174,46 @@ Destination directory is given by the `dest-source-dir' generic function."))
                (logger "skipped ~s" output)))
   nil)
 
-(defmethod asdf:output-files ((op asdf:compile-op) (c nasdf-file))
-  (values (list (uiop:merge-pathnames* (pathname-name (asdf:component-name c))
-                                       *prefix*))
+(defmethod output-files ((op compile-op) (c nasdf-file))
+  (values (list (merge-pathnames* (pathname-name (component-name c))
+                                  *prefix*))
           t))
 
-(defmethod asdf:output-files ((op asdf:compile-op) (c nasdf-binary-file))
-  (values (list (uiop:merge-pathnames* (basename (asdf:component-name c)) *bindir*))
+(defmethod output-files ((op compile-op) (c nasdf-binary-file))
+  (values (list (merge-pathnames* (basename (component-name c)) *bindir*))
           t))
 
-(defmethod asdf:perform ((op asdf:compile-op) (c nasdf-binary-file))
+(defmethod perform ((op compile-op) (c nasdf-binary-file))
   (call-next-method)
-  (mapc #'make-executable (asdf:output-files op c))
+  (mapc #'make-executable (output-files op c))
   nil)
 
-(defmethod asdf:output-files ((op asdf:compile-op) (c nasdf-library-file))
-  (values (list (uiop:merge-pathnames* (basename (asdf:component-name c)) (libdir c)))
+(defmethod output-files ((op compile-op) (c nasdf-library-file))
+  (values (list (merge-pathnames* (basename (component-name c)) (libdir c)))
           t))
 
-(defmethod asdf:output-files ((op asdf:compile-op) (c nasdf-desktop-file))
-  (values (list (uiop:merge-pathnames* (uiop:merge-pathnames*
-                                        (basename (asdf:component-name c))
-                                        "applications/")
-                                       *datadir*))
+(defmethod output-files ((op compile-op) (c nasdf-desktop-file))
+  (values (list (merge-pathnames* (merge-pathnames*
+                                   (basename (component-name c))
+                                   "applications/")
+                                  *datadir*))
           t))
 
+(defmethod output-files ((op compile-op) (c nasdf-appdata-file))
+  (values (list (merge-pathnames* (merge-pathnames*
+                                   (basename (component-name c))
+                                   "metainfo/")
+                                  *datadir*))
+          t))
+
+(defmethod output-files ((op compile-op) (c nasdf-icon-scalable-file))
+  (values (list (merge-pathnames* (merge-pathnames*
+                                   (basename (component-name c))
+                                   "icons/hicolor/scalable/apps/")
+                                  *datadir*))
+          t))
+
+;; TODO Moving png icons to assets/icons would simplify their handling.
 (defun scan-last-number (path)
   "Return the last number found in PATH.
 Return NIL is there is none."
@@ -192,18 +224,18 @@ Return NIL is there is none."
                                 (if result
                                     (return-from red result)
                                     result)))
-                          (uiop:native-namestring path)
+                          (native-namestring path)
                           :initial-value '()
                           :from-end t))))
     (when result
       (coerce result 'string))))
 
-(defmethod asdf:input-files ((op asdf:compile-op) (c nasdf-icon-directory))
+(defmethod input-files ((op compile-op) (c nasdf-icon-directory))
   "Return all files of NASDF-ICON-DIRECTORY `type' in its directory.
 File must contain a number in their path."
   (let ((result (remove-if (complement #'scan-last-number)
-                           (uiop:directory-files (asdf:component-pathname c)
-                                                 (uiop:strcat "*." (asdf:file-type c))))))
+                           (directory-files (component-pathname c)
+                                            (strcat "*." (file-type c))))))
     (let* ((dimensions (mapcar #'scan-last-number result))
            (dups (set-difference dimensions
                                  (remove-duplicates dimensions)
@@ -212,8 +244,8 @@ File must contain a number in their path."
           result
           (error "Directory contains icons with duplicate dimensions: ~a" dups)))))
 
-(defmethod asdf:output-files ((op asdf:compile-op) (c nasdf-icon-directory))
-  (let ((name (asdf:primary-system-name (asdf:component-system c))))
+(defmethod output-files ((op compile-op) (c nasdf-icon-directory))
+  (let ((name (primary-system-name (component-system c))))
     (values
      (mapcar (lambda (path)
                (let ((icon-size (scan-last-number path)) )
@@ -221,16 +253,8 @@ File must contain a number in their path."
                          *datadir*
                          icon-size icon-size
                          name)))
-             (asdf:input-files op c))
+             (input-files op c))
      t)))
-
-(defun git-ls-files (root dir)
-  (split-string
-   (run-program (append (list *git-program*
-                              "-C" (native-namestring root)
-                              "ls-files" (native-namestring dir)))
-                :output '(:string :stripped t))
-   :separator '(#\newline #\return #\linefeed)))
 
 (defun file-excluded-type (file exclude-types)
   (member (pathname-type file) exclude-types :test 'equalp))
@@ -242,13 +266,13 @@ File must contain a number in their path."
      (constantly t)
      (lambda (dir)
        (notany (lambda (exclusion)
-                 (uiop:string-suffix-p (basename dir) exclusion))
+                 (string-suffix-p (basename dir) exclusion))
                (mapcar #'basename exclude-subpath)))
      (lambda (subdirectory)
        (setf result (append result
                             (remove-if
                              (lambda (file) (file-excluded-type file exclude-types))
-                             (uiop:directory-files subdirectory))))))
+                             (directory-files subdirectory))))))
     result))
 
 (export-always 'copy-directory)
@@ -267,40 +291,34 @@ File must contain a number in their path."
                                :exclude-types exclude-types)))
 
 
-(defmethod asdf:input-files ((op asdf:compile-op) (component nasdf-source-directory))
-  "Return all files of NASDF-SOURCE-DIRECTORY.
-They are either listed with 'git ls-files' or directly if Git is not found."
-  (let ((source (asdf:component-pathname component))
-        (root (asdf:system-source-directory (asdf:component-system component))))
-    (handler-case
-        (uiop:with-current-directory (root)
-          (let ((absolute-exclusions (mapcar (lambda (exclusion)
-                                               (namestring
-                                                (merge-pathnames*
-                                                 (uiop:ensure-directory-pathname exclusion)
-                                                 (uiop:ensure-directory-pathname source))))
-                                             (exclude-subpath component))))
-            (remove-if (lambda (file)
-                         (or (file-excluded-type file (exclude-types component))
-                             (let ((file-string (namestring file)))
-                               (some (lambda (exclusion)
-                                       (uiop:string-prefix-p exclusion file-string))
-                                     absolute-exclusions))))
-                       (mapcar (lambda (path)
-                                 (ensure-pathname path :truenamize t))
-                               (git-ls-files
-                                root
-                                source)))))
-      (error (c)
-        (warn "~a~&Git error, falling back to direct listing." c)
-        (uiop:with-current-directory (root)
-          (list-directory source :exclude-subpath (exclude-subpath component)
-                                 :exclude-types (exclude-types component)))))))
+(defmethod input-files ((op compile-op) (component nasdf-source-directory))
+  "Return all files of NASDF-SOURCE-DIRECTORY."
+  (with-current-directory ((system-source-directory (component-system component)))
+    (list-directory (component-pathname component)
+                    :exclude-subpath (exclude-subpath component)
+                    :exclude-types (exclude-types component))))
 
-(defmethod asdf:output-files ((op asdf:compile-op) (component nasdf-source-directory))
-  (let ((root (asdf:system-source-directory (asdf:component-system component))))
+(defmethod output-files ((op compile-op) (component nasdf-source-directory))
+  (let ((root (system-source-directory (component-system component))))
     (values
      (mapcar (lambda (path)
-               (merge-pathnames* (uiop:subpathp path root) (dest-source-dir component)))
-             (asdf:input-files op component))
+               (merge-pathnames* (subpathp path root) (dest-source-dir component)))
+             (input-files op component))
      t)))
+
+(export-always 'nasdf-source-file)
+(defclass nasdf-source-file (nasdf-file) ()
+  (:documentation "Common Lisp source files.
+
+Destination directory is given by the `dest-source-dir' generic function."))
+(import 'nasdf-source-file :asdf-user)
+
+(defmethod dest-source-dir ((component nasdf-source-file)) ; TODO: Factor with other method?
+  "The directory into which the source is installed."
+  (let ((name (primary-system-name (component-system component))))
+    (ensure-directory-pathname
+     (merge-pathnames* name *dest-source-dir*))))
+
+(defmethod output-files ((op compile-op) (c nasdf-source-file))
+  (values (list (merge-pathnames* (basename (component-name c)) (dest-source-dir c)))
+          t))

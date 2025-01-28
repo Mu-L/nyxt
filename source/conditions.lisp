@@ -16,16 +16,7 @@ It should abort the ongoing command, but not the whole process."))
   ()
   (:documentation "An existing instance of Nyxt is already running."))
 
-(define-condition web-context-error (nyxt-error)
-  ((context :initarg :context :reader context)))
-
 (export-always 'prompt-buffer-canceled)
 (define-condition prompt-buffer-canceled (error)
-  ())
-(export-always 'prompt-buffer-non-interactive)
-(define-condition prompt-buffer-non-interactive (error)
-  ((name :initarg :name :accessor name))
-  (:report (lambda (c stream)
-             (format stream "Tried to invoke the prompt buffer (~a) when non-interactive."
-                     (name c))))
-  (:documentation "See `*interactive-p*'."))
+  ()
+  (:documentation "Signaled when prompt buffer is exited abnormally (via ESC key, for example)."))

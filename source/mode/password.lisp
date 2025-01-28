@@ -1,15 +1,31 @@
 ;;;; SPDX-FileCopyrightText: Atlas Engineer LLC
 ;;;; SPDX-License-Identifier: BSD-3-Clause
 
-(nyxt:define-package :nyxt/password-mode
-    (:documentation "Interface with third-party password managers."))
-(in-package :nyxt/password-mode)
+(nyxt:define-package :nyxt/mode/password
+  (:documentation "Package for `password-mode', mode to interface with password managers.
+
+Relies on the `password' library for most package manager interactions. In
+particular:
+- Specifies `password::execute' for KeePassXC to prompt for Yubikey tap.
+- Specifies `password:complete-interface' to prompt for details for interfaces
+  that need it.
+- Adds a `with-password' macro relying on `password:password-correct-p' to
+  decide whether the interface is properly connected and complete, and calling
+  `password:complete-interface' if it's not.
+
+Also note the internal `make-password-interface-user-classes' function to force
+password interfaces to become `user-class'es and thus
+`define-configuration'-friendly.
+
+See the `password-mode' for the external user-facing APIs."))
+(in-package :nyxt/mode/password)
 
 (define-mode password-mode ()
   "Enable interface with third-party password managers.
 You can customize the default interface with the mode slot `password-interface'.
-To interact with the password manager, see commands like `copy-password' or
-`save-new-password'."
+
+See `nyxt/mode/password' package documentation for implementation details and
+internal programming APIs."
   ((visible-in-status-p nil)
    (password-interface
     (make-password-interface)
@@ -21,6 +37,9 @@ To use, say, KeepassXC, set this slot to
   (make-instance 'password:keepassxc-interface)
 
 Password interfaces are configurable through a `customize-instance' method.")))
+
+(define-configuration context-buffer
+  ((default-modes (cons 'password-mode %slot-value%))))
 
 (defmethod password-interface ((buffer buffer))
   (password-interface (find-submode 'password-mode buffer)))
@@ -60,17 +79,23 @@ for which the `executable' slot is non-nil."
   ((prompter:name "Passwords")
    (buffer :accessor buffer :initarg :buffer)
    (password-instance :accessor password-instance :initarg :password-instance)
-   (prompter:hide-attribute-header-p :single)
    (prompter:constructor
     (lambda (source)
       (password:list-passwords (password-instance source))))
-   (prompter:return-actions password-source-actions)))
+   (prompter:actions-on-return password-source-actions)))
 
 (defun password-debug-info ()
-  (alex:when-let ((interface (password-interface (current-buffer))))
+  (when-let ((interface (password-interface (current-buffer))))
     (log:debug "Password interface ~a uses executable ~s."
                (class-name (class-of interface))
                (password:executable interface))))
+
+(defmacro with-password (password-interface &body body)
+  `(if (password:password-correct-p ,password-interface)
+       ,@body
+       (progn
+         (password:complete-interface ,password-interface)
+         ,@body)))
 
 (define-command save-new-password (&optional (buffer (current-buffer)))
   "Save password to password interface."
@@ -79,21 +104,21 @@ for which the `executable' slot is non-nil."
     ((and (password-interface buffer)
           (nyxt:has-method-p (password-interface (find-submode 'password-mode buffer))
                              #'password:save-password))
-     (let* ((password-name (prompt1
-                             :prompt "Name for new password"
-                             :input (or (quri:uri-domain (url (current-buffer))) "")
-                             :sources 'prompter:raw-source))
-            (new-password (prompt1
-                            :prompt "New password (leave empty to generate)"
-                            :invisible-input-p t
-                            :sources 'prompter:raw-source))
-            (username (prompt1
-                        :prompt "Username (can be empty)"
-                        :sources 'prompter:raw-source)))
-       (password:save-password (password-interface buffer)
-                               :username username
-                               :password-name password-name
-                               :password new-password)))
+     (with-password (password-interface buffer)
+       (let* ((password-name (prompt1 :prompt "Name for new password"
+                                      :input (or (quri:uri-domain (url (current-buffer)))
+                                                 "")
+                                      :sources 'prompter:raw-source))
+              (new-password (prompt1 :prompt "New password (leave empty to generate)"
+                                     :sources 'prompter:raw-source
+                                     :height :fit-to-prompt
+                                     :invisible-input-p t))
+              (username (prompt1 :prompt "Username (can be empty)"
+                                 :sources 'prompter:raw-source)))
+         (password:save-password (password-interface buffer)
+                                 :username username
+                                 :password-name password-name
+                                 :password new-password))))
     ((null (password-interface buffer))
      (echo-warning "No password manager found."))
     (t (echo-warning "Password manager ~s does not support saving passwords."
@@ -115,8 +140,8 @@ for which the `executable' slot is non-nil."
                    (uiop:native-namestring
                     (prompt1
                      :prompt "Password database file (.kdbx)"
-                     :extra-modes 'nyxt/file-manager-mode:file-manager-mode
-                     :sources (make-instance 'nyxt/file-manager-mode:file-source
+                     :extra-modes 'nyxt/mode/file-manager:file-manager-mode
+                     :sources (make-instance 'nyxt/mode/file-manager:file-source
                                              :extensions '("kdbx")))))
         unless (password::key-file password-interface)
           do (if-confirm ("Do you use key file for password database locking?")
@@ -124,8 +149,8 @@ for which the `executable' slot is non-nil."
                        (uiop:native-namestring
                         (prompt1
                          :prompt "Password database key file"
-                         :extra-modes 'nyxt/file-manager-mode:file-manager-mode
-                         :sources (make-instance 'nyxt/file-manager-mode:file-source)))))
+                         :extra-modes 'nyxt/mode/file-manager:file-manager-mode
+                         :sources (make-instance 'nyxt/mode/file-manager:file-source)))))
         unless (password::yubikey-slot password-interface)
           do (if-confirm ("Do you use Yubikey for password database locking")
                  (setf (password::yubikey-slot password-interface)
@@ -135,14 +160,8 @@ for which the `executable' slot is non-nil."
                  (prompt1 :prompt (format nil "Database password for ~a (leave empty if none)"
                                           (password::password-file password-interface))
                           :sources 'prompter:raw-source
+                          :height :fit-to-prompt
                           :invisible-input-p t))))
-
-(defmacro with-password (password-interface &body body)
-  `(if (password:password-correct-p ,password-interface)
-       ,@body
-       (progn
-         (password:complete-interface ,password-interface)
-         ,@body)))
 
 (define-command copy-password-prompt-details (&optional (buffer (current-buffer)))
   "Copy password prompting for all the details without suggestions."
@@ -187,7 +206,7 @@ See also `copy-password-prompt-details'."
                           'password-source
                           :buffer buffer
                           :password-instance (password-interface buffer)
-                          :return-actions (sera:filter (sera:eqs 'clip-username)
-                                                       password-source-actions
-                                                       :key #'name))))
+                          :actions-on-return (sera:filter (sera:eqs 'clip-username)
+                                                          password-source-actions
+                                                          :key #'name))))
       (echo-warning "No password manager found.")))
